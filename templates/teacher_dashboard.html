@@ -1,0 +1,266 @@
+{% extends "base.html" %}
+
+{% block title %}Teacher Dashboard - AttendanceHub{% endblock %}
+
+{% block content %}
+<div class="max-w-7xl mx-auto">
+    <!-- Welcome Header -->
+    <div class="bg-white rounded-xl card-shadow p-6 mb-6">
+        <div class="flex items-center justify-between">
+            <div>
+                <h1 class="text-2xl font-bold text-gray-900" id="welcome-message">Welcome back!</h1>
+                <p class="text-gray-600" id="teacher-info">Loading your information...</p>
+            </div>
+            <div class="flex items-center space-x-4">
+                <div class="text-right">
+                    <div class="text-sm text-gray-500">Today's Date</div>
+                    <div class="text-lg font-semibold text-gray-900" id="current-date"></div>
+                </div>
+                <button id="generate-qr-btn" class="bg-indigo-600 hover:bg-indigo-700 text-white px-6 py-3 rounded-lg transition-colors">
+                    <i class="fas fa-qrcode mr-2"></i>Generate QR Code
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Quick Stats -->
+    <div class="grid md:grid-cols-4 gap-6 mb-6">
+        <div class="bg-white rounded-lg card-shadow p-6">
+            <div class="flex items-center">
+                <div class="p-3 rounded-full bg-blue-100 text-blue-600">
+                    <i class="fas fa-chalkboard-teacher text-xl"></i>
+                </div>
+                <div class="ml-4">
+                    <p class="text-sm text-gray-500">Today's Classes</p>
+                    <p class="text-2xl font-bold text-gray-900" id="today-classes">-</p>
+                </div>
+            </div>
+        </div>
+        
+        <div class="bg-white rounded-lg card-shadow p-6">
+            <div class="flex items-center">
+                <div class="p-3 rounded-full bg-green-100 text-green-600">
+                    <i class="fas fa-user-check text-xl"></i>
+                </div>
+                <div class="ml-4">
+                    <p class="text-sm text-gray-500">Present Students</p>
+                    <p class="text-2xl font-bold text-gray-900" id="present-students">-</p>
+                </div>
+            </div>
+        </div>
+        
+        <div class="bg-white rounded-lg card-shadow p-6">
+            <div class="flex items-center">
+                <div class="p-3 rounded-full bg-orange-100 text-orange-600">
+                    <i class="fas fa-percentage text-xl"></i>
+                </div>
+                <div class="ml-4">
+                    <p class="text-sm text-gray-500">Avg Attendance</p>
+                    <p class="text-2xl font-bold text-gray-900" id="avg-attendance">-</p>
+                </div>
+            </div>
+        </div>
+        
+        <div class="bg-white rounded-lg card-shadow p-6">
+            <div class="flex items-center">
+                <div class="p-3 rounded-full bg-purple-100 text-purple-600">
+                    <i class="fas fa-exclamation-triangle text-xl"></i>
+                </div>
+                <div class="ml-4">
+                    <p class="text-sm text-gray-500">Low Attendance</p>
+                    <p class="text-2xl font-bold text-gray-900" id="low-attendance">-</p>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="grid lg:grid-cols-3 gap-6">
+        <!-- Main Content -->
+        <div class="lg:col-span-2 space-y-6">
+            <!-- QR Code Generation -->
+            <div class="bg-white rounded-xl card-shadow p-6">
+                <div class="flex items-center justify-between mb-4">
+                    <h2 class="text-xl font-semibold text-gray-900">
+                        <i class="fas fa-qrcode text-indigo-600 mr-2"></i>
+                        QR Code Generator
+                    </h2>
+                </div>
+                
+                <div class="grid md:grid-cols-2 gap-6">
+                    <div>
+                        <label class="block text-sm font-medium text-gray-700 mb-2">Select Class Session</label>
+                        <select id="session-select" class="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500">
+                            <option value="">Select a session...</option>
+                        </select>
+                        
+                        <button id="generate-session-qr" class="w-full mt-4 bg-indigo-600 hover:bg-indigo-700 text-white py-2 px-4 rounded-lg transition-colors disabled:opacity-50" disabled>
+                            <i class="fas fa-qrcode mr-2"></i>Generate QR Code
+                        </button>
+                    </div>
+                    
+                    <div id="qr-display" class="text-center">
+                        <div id="qr-placeholder" class="w-48 h-48 mx-auto bg-gray-100 rounded-lg flex items-center justify-center">
+                            <div class="text-gray-400">
+                                <i class="fas fa-qrcode text-4xl mb-2"></i>
+                                <p class="text-sm">QR Code will appear here</p>
+                            </div>
+                        </div>
+                        <div id="qr-info" class="mt-4 hidden">
+                            <p class="text-sm text-gray-600">QR Code Active</p>
+                            <p class="text-xs text-gray-500" id="qr-expires">Expires in: --</p>
+                            <button id="download-qr" class="mt-2 text-indigo-600 hover:text-indigo-700 text-sm">
+                                <i class="fas fa-download mr-1"></i>Download QR Code
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Live Attendance Monitoring -->
+            <div class="bg-white rounded-xl card-shadow p-6">
+                <div class="flex items-center justify-between mb-4">
+                    <h2 class="text-xl font-semibold text-gray-900">
+                        <i class="fas fa-users text-green-600 mr-2"></i>
+                        Live Attendance
+                    </h2>
+                    <div class="flex items-center space-x-3">
+                        <div class="flex items-center">
+                            <div class="w-3 h-3 bg-green-500 rounded-full mr-2 animate-pulse"></div>
+                            <span class="text-sm text-gray-600">Live</span>
+                        </div>
+                        <button id="refresh-attendance" class="text-gray-500 hover:text-gray-700">
+                            <i class="fas fa-sync-alt"></i>
+                        </button>
+                    </div>
+                </div>
+                
+                <div class="mb-4">
+                    <select id="class-filter" class="px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500">
+                        <option value="">All Classes</option>
+                    </select>
+                </div>
+                
+                <div id="attendance-list" class="space-y-3 max-h-96 overflow-y-auto">
+                    <div class="text-center py-8 text-gray-500">
+                        <i class="fas fa-spinner fa-spin text-2xl mb-2"></i>
+                        <p>Loading attendance data...</p>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Today's Schedule -->
+            <div class="bg-white rounded-xl card-shadow p-6">
+                <h2 class="text-xl font-semibold text-gray-900 mb-4">
+                    <i class="fas fa-calendar-day text-blue-600 mr-2"></i>
+                    Today's Schedule
+                </h2>
+                <div id="teacher-schedule" class="space-y-3">
+                    <div class="text-center py-8 text-gray-500">
+                        <i class="fas fa-spinner fa-spin text-2xl mb-2"></i>
+                        <p>Loading schedule...</p>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Sidebar -->
+        <div class="space-y-6">
+            <!-- Quick Actions -->
+            <div class="bg-white rounded-xl card-shadow p-6">
+                <h3 class="text-lg font-semibold text-gray-900 mb-4">Quick Actions</h3>
+                <div class="space-y-3">
+                    <button id="manual-attendance-btn" class="w-full text-left p-3 rounded-lg hover:bg-gray-50 transition-colors border border-gray-200">
+                        <i class="fas fa-edit text-blue-600 mr-3"></i>
+                        Manual Attendance
+                    </button>
+                    <button id="attendance-report-btn" class="w-full text-left p-3 rounded-lg hover:bg-gray-50 transition-colors border border-gray-200">
+                        <i class="fas fa-chart-bar text-green-600 mr-3"></i>
+                        Generate Report
+                    </button>
+                    <button id="send-notification-btn" class="w-full text-left p-3 rounded-lg hover:bg-gray-50 transition-colors border border-gray-200">
+                        <i class="fas fa-bell text-orange-600 mr-3"></i>
+                        Send Notification
+                    </button>
+                    <button id="class-analytics-btn" class="w-full text-left p-3 rounded-lg hover:bg-gray-50 transition-colors border border-gray-200">
+                        <i class="fas fa-analytics text-purple-600 mr-3"></i>
+                        Class Analytics
+                    </button>
+                </div>
+            </div>
+
+            <!-- Recent Activity -->
+            <div class="bg-white rounded-xl card-shadow p-6">
+                <h3 class="text-lg font-semibold text-gray-900 mb-4">Recent Activity</h3>
+                <div id="recent-activity" class="space-y-3">
+                    <div class="text-center py-4 text-gray-500">
+                        <p class="text-sm">Loading recent activity...</p>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Low Attendance Alerts -->
+            <div class="bg-white rounded-xl card-shadow p-6">
+                <h3 class="text-lg font-semibold text-gray-900 mb-4">
+                    <i class="fas fa-exclamation-triangle text-red-500 mr-2"></i>
+                    Attendance Alerts
+                </h3>
+                <div id="attendance-alerts" class="space-y-3">
+                    <div class="text-center py-4 text-gray-500">
+                        <p class="text-sm">No alerts</p>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Modals -->
+<!-- Manual Attendance Modal -->
+<div id="manual-attendance-modal" class="fixed inset-0 bg-black bg-opacity-50 hidden z-50">
+    <div class="flex items-center justify-center min-h-screen p-4">
+        <div class="bg-white rounded-xl max-w-2xl w-full max-h-screen overflow-y-auto">
+            <div class="p-6">
+                <div class="flex items-center justify-between mb-4">
+                    <h3 class="text-xl font-semibold text-gray-900">Manual Attendance</h3>
+                    <button id="close-manual-modal" class="text-gray-400 hover:text-gray-600">
+                        <i class="fas fa-times text-xl"></i>
+                    </button>
+                </div>
+                
+                <div class="mb-4">
+                    <label class="block text-sm font-medium text-gray-700 mb-2">Select Session</label>
+                    <select id="manual-session-select" class="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500">
+                        <option value="">Select a session...</option>
+                    </select>
+                </div>
+                
+                <div id="student-list" class="space-y-2 max-h-96 overflow-y-auto">
+                    <!-- Student list will be populated here -->
+                </div>
+                
+                <div class="flex justify-end space-x-3 mt-6">
+                    <button id="cancel-manual" class="px-4 py-2 text-gray-600 hover:text-gray-800">Cancel</button>
+                    <button id="save-manual-attendance" class="bg-indigo-600 hover:bg-indigo-700 text-white px-6 py-2 rounded-lg transition-colors">
+                        Save Attendance
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Success/Error Messages -->
+<div id="success-message" class="fixed top-4 right-4 bg-green-500 text-white px-6 py-3 rounded-lg shadow-lg hidden z-50">
+    <i class="fas fa-check-circle mr-2"></i>
+    <span id="success-text">Success!</span>
+</div>
+
+<div id="error-message" class="fixed top-4 right-4 bg-red-500 text-white px-6 py-3 rounded-lg shadow-lg hidden z-50">
+    <i class="fas fa-exclamation-circle mr-2"></i>
+    <span id="error-text">Error occurred</span>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script src="{{ url_for('static', filename='js/teacher-dashboard.js') }}"></script>
+{% endblock %}

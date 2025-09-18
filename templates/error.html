@@ -1,0 +1,18 @@
+{% extends "base.html" %}
+
+{% block title %}Error {{ error_code }} - AttendanceHub{% endblock %}
+
+{% block content %}
+<div class="text-center">
+    <div class="max-w-md mx-auto">
+        <div class="text-6xl text-indigo-600 mb-4">
+            <i class="fas fa-exclamation-triangle"></i>
+        </div>
+        <h1 class="text-4xl font-bold text-gray-900 mb-4">Error {{ error_code }}</h1>
+        <p class="text-xl text-gray-600 mb-8">{{ error_message }}</p>
+        <a href="/" class="inline-block bg-indigo-600 hover:bg-indigo-700 text-white font-semibold py-3 px-6 rounded-lg transition-colors">
+            <i class="fas fa-home mr-2"></i>Go Home
+        </a>
+    </div>
+</div>
+{% endblock %}
