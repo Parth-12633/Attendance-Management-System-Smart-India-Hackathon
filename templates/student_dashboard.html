@@ -79,9 +79,14 @@
                         <i class="fas fa-qrcode text-indigo-600 mr-2"></i>
                         Mark Attendance
                     </h2>
-                    <button id="scan-qr-btn" class="bg-indigo-600 hover:bg-indigo-700 text-white px-4 py-2 rounded-lg transition-colors">
-                        <i class="fas fa-camera mr-2"></i>Scan QR Code
-                    </button>
+                    <div class="flex gap-2">
+                        <button id="scan-qr-btn" class="bg-indigo-600 hover:bg-indigo-700 text-white px-4 py-2 rounded-lg transition-colors">
+                            <i class="fas fa-camera mr-2"></i>Scan QR Code
+                        </button>
+                        <button id="camera-attendance-btn" class="bg-green-600 hover:bg-green-700 text-white px-4 py-2 rounded-lg transition-colors">
+                            <i class="fas fa-user mr-2"></i>Camera Attendance
+                        </button>
+                    </div>
                 </div>
                 
                 <!-- QR Scanner Interface -->
@@ -100,19 +105,28 @@
                         <button id="stop-scan-btn" class="bg-gray-500 hover:bg-gray-600 text-white px-4 py-2 rounded-lg transition-colors">
                             <i class="fas fa-stop mr-2"></i>Stop Scanning
                         </button>
+                        <button id="fallback-manual-btn" class="bg-indigo-100 text-indigo-700 px-4 py-2 rounded mt-4">Use Manual Code Instead</button>
                     </div>
                 </div>
                 
                 <!-- Manual Entry Option -->
-                <div id="manual-entry" class="border-t pt-4 mt-4">
-                    <h3 class="text-lg font-medium text-gray-900 mb-3">Or enter QR code manually:</h3>
+                <div id="manual-entry" class="mt-6 bg-gray-50 p-4 rounded-lg border border-gray-200">
+                    <h3 class="text-lg font-medium text-gray-900 mb-3">
+                        <i class="fas fa-keyboard text-indigo-600 mr-2"></i>
+                        Enter attendance code manually:
+                    </h3>
                     <div class="flex gap-3">
-                        <input type="text" id="manual-qr-input" placeholder="Enter QR code" 
-                               class="flex-1 px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500">
-                        <button id="submit-manual-qr" class="bg-indigo-600 hover:bg-indigo-700 text-white px-6 py-2 rounded-lg transition-colors">
+                        <input type="text" id="manual-qr-input" placeholder="Enter the attendance code provided by your teacher" 
+                               class="flex-1 px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 text-lg">
+                        <button id="submit-manual-qr" class="bg-indigo-600 hover:bg-indigo-700 text-white px-8 py-3 rounded-lg transition-colors font-medium">
+                            <i class="fas fa-check mr-2"></i>
                             Submit
                         </button>
                     </div>
+                    <p class="text-sm text-gray-600 mt-2">
+                        <i class="fas fa-info-circle mr-1"></i>
+                        If QR scanning doesn't work, ask your teacher for the attendance code and enter it here.
+                    </p>
                 </div>
             </div>
 
@@ -192,9 +206,35 @@
     <i class="fas fa-exclamation-circle mr-2"></i>
     <span id="error-text">Error marking attendance</span>
 </div>
+
+<!-- Camera Attendance Modal -->
+<div id="camera-attendance-modal" class="fixed inset-0 bg-black bg-opacity-50 hidden z-50">
+    <div class="flex items-center justify-center min-h-screen p-4">
+        <div class="bg-white rounded-xl max-w-2xl w-full max-h-screen overflow-y-auto">
+            <div class="p-6">
+                <div class="flex items-center justify-between mb-4">
+                    <h3 class="text-xl font-semibold text-gray-900">Camera Attendance</h3>
+                    <button id="close-camera-modal" class="text-gray-400 hover:text-gray-600">
+                        <i class="fas fa-times text-xl"></i>
+                    </button>
+                </div>
+                <div class="flex flex-col items-center">
+                    <label for="session-select" class="mb-2 text-sm text-gray-700">Select Session:</label>
+                    <select id="session-select" class="mb-3 px-4 py-2 rounded border border-gray-300 text-lg w-full max-w-xs"></select>
+                    <video id="camera-attendance-video" width="320" height="240" autoplay class="rounded-lg border mb-2"></video>
+                    <button id="scan-face-btn" class="bg-indigo-600 text-white px-4 py-2 rounded mb-2">Scan Face</button>
+                    <div id="camera-attendance-feedback" class="text-center text-lg font-semibold mt-2"></div>
+                    <button id="fallback-qr-btn" class="bg-indigo-100 text-indigo-700 px-4 py-2 rounded mt-4">Use QR/Code Instead</button>
+                </div>
+                <p class="text-xs text-gray-500 mt-2">Scan your face to mark attendance for your session. If it doesn't work, you can use QR code or manual code attendance.</p>
+            </div>
+        </div>
+    </div>
+</div>
 {% endblock %}
 
 {% block scripts %}
 <script src="https://cdn.jsdelivr.net/npm/jsqr@1.4.0/dist/jsQR.js"></script>
+<script src="{{ url_for('static', filename='js/auth.js') }}"></script>
 <script src="{{ url_for('static', filename='js/student-dashboard.js') }}"></script>
 {% endblock %}

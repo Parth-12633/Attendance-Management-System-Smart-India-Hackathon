@@ -1,6 +1,6 @@
 // Import necessary modules
-const auth = require("./auth") // Placeholder for actual import
-const axios = require("axios") // Placeholder for actual import
+// const auth = require("./auth") // Removed for browser global
+// const axios = require("axios") // axios is loaded globally
 
 document.addEventListener("DOMContentLoaded", async () => {
   // Check authentication
@@ -16,8 +16,8 @@ document.addEventListener("DOMContentLoaded", async () => {
   // Set current date
   document.getElementById("current-date").textContent = new Date().toLocaleDateString()
 
-  // Auto-refresh attendance every 30 seconds
-  setInterval(refreshAttendance, 30000)
+  // Auto-refresh attendance every 10 seconds for near real-time updates
+  setInterval(refreshAttendance, 10000)
 })
 
 let currentQRSession = null
@@ -34,22 +34,75 @@ async function initializeDashboard() {
 
 function setupEventListeners() {
   // QR Code Generation
-  document.getElementById("generate-qr-btn").addEventListener("click", showQRGenerator)
-  document.getElementById("session-select").addEventListener("change", toggleGenerateButton)
-  document.getElementById("generate-session-qr").addEventListener("click", generateQRCode)
-  document.getElementById("download-qr").addEventListener("click", downloadQRCode)
+  const addListener = (id, event, handler) => {
+    const el = document.getElementById(id);
+    if (el) el.addEventListener(event, handler);
+  };
+
+  addListener("generate-qr-btn", "click", showQRGenerator);
+  addListener("session-select", "change", toggleGenerateButton);
+  addListener("generate-session-qr", "click", generateQRCode);
+  addListener("download-qr", "click", downloadQRCode);
+
+  // Create Session Modal
+  addListener("open-create-session", "click", () => {
+    document.getElementById("create-session-modal").classList.remove("hidden");
+  });
+  addListener("close-create-session", "click", () => {
+    document.getElementById("create-session-modal").classList.add("hidden");
+  });
+  addListener("create-session-form", "submit", async (e) => {
+    e.preventDefault();
+    await submitCreateSessionForm();
+  });
 
   // Manual Attendance
-  document.getElementById("manual-attendance-btn").addEventListener("click", openManualAttendance)
-  document.getElementById("close-manual-modal").addEventListener("click", closeManualAttendance)
-  document.getElementById("cancel-manual").addEventListener("click", closeManualAttendance)
-  document.getElementById("save-manual-attendance").addEventListener("click", saveManualAttendance)
-  document.getElementById("manual-session-select").addEventListener("change", loadStudentList)
+  addListener("manual-attendance-btn", "click", openManualAttendance);
+  addListener("close-manual-modal", "click", closeManualAttendance);
+  addListener("cancel-manual", "click", closeManualAttendance);
+  addListener("save-manual-attendance", "click", saveManualAttendance);
+  addListener("manual-session-select", "change", loadStudentList);
+
+  // Camera Attendance
+  // Camera attendance is now student-only; remove event listeners for teacher dashboard
 
   // Other actions
-  document.getElementById("refresh-attendance").addEventListener("click", refreshAttendance)
-  document.getElementById("attendance-report-btn").addEventListener("click", generateReport)
-  document.getElementById("class-filter").addEventListener("change", filterAttendance)
+  addListener("refresh-attendance", "click", refreshAttendance);
+  addListener("attendance-report-btn", "click", generateReport);
+  addListener("class-filter", "change", filterAttendance);
+}
+
+async function submitCreateSessionForm() {
+  const standard = document.getElementById("create-class-standard").value.trim();
+  const division = document.getElementById("create-class-division").value.trim();
+  const subjectName = document.getElementById("create-subject-name").value.trim();
+  const subjectCode = document.getElementById("create-subject-code").value.trim();
+  const room = document.getElementById("create-room-number").value.trim();
+  const startTime = document.getElementById("create-session-start").value;
+  const endTime = document.getElementById("create-session-end").value;
+
+  if (!standard || !division || !subjectName || !subjectCode || !startTime || !endTime) {
+    showError("Please fill in all required fields.");
+    return;
+  }
+
+  try {
+    const response = await axios.post("/api/teacher/create_session", {
+      class_standard: standard,
+      class_division: division,
+      subject_name: subjectName,
+      subject_code: subjectCode,
+      room: room,
+      start_time: startTime,
+      end_time: endTime
+    });
+    showSuccess("Session created successfully!");
+    document.getElementById("create-session-modal").classList.add("hidden");
+    await loadDashboardData();
+  } catch (error) {
+    console.error("Error creating session:", error);
+    showError(error.response?.data?.error || "Failed to create session");
+  }
 }
 
 async function loadDashboardData() {
@@ -89,16 +142,21 @@ function populateSessionSelects(sessions) {
   sessionSelect.innerHTML = '<option value="">Select a session...</option>'
   manualSessionSelect.innerHTML = '<option value="">Select a session...</option>'
 
+  // Show all sessions for today so newly created sessions are visible
   sessions.forEach((session) => {
     const startTime = new Date(session.start_time).toLocaleTimeString("en-US", {
       hour: "2-digit",
       minute: "2-digit",
-    })
-
-    const option = `<option value="${session.id}">${session.subject} - ${session.class_name} (${startTime})</option>`
-    sessionSelect.innerHTML += option
-    manualSessionSelect.innerHTML += option
-  })
+    });
+    const endTime = session.end_time ? new Date(session.end_time).toLocaleTimeString("en-US", {
+      hour: "2-digit",
+      minute: "2-digit",
+    }) : "--:--";
+    const status = session.is_active ? "Active" : "Scheduled";
+    const option = `<option value="${session.id}">${session.subject} - ${session.class_name} (${startTime} - ${endTime}) [${status}]</option>`;
+    sessionSelect.innerHTML += option;
+    manualSessionSelect.innerHTML += option;
+  });
 }
 
 function displayTeacherSchedule(sessions) {
@@ -159,45 +217,75 @@ function toggleGenerateButton() {
 }
 
 async function generateQRCode() {
-  const sessionSelect = document.getElementById("session-select")
-  const sessionId = sessionSelect.value
+  const sessionSelect = document.getElementById("session-select");
+  const sessionId = sessionSelect.value;
+  const subjectSelect = document.getElementById('subject-select');
+  const subject = subjectSelect ? subjectSelect.value : null;
 
   if (!sessionId) {
-    showError("Please select a session")
-    return
+    showError("Please select a session");
+    return;
   }
 
   try {
-    const response = await axios.post("/api/attendance/generate-qr", {
-      timetable_id: sessionId,
-    })
+    // Call teacher QR generation endpoint (include subject)
+    const response = await axios.post(`/api/teacher/session/${sessionId}/generate_qr`, { subject });
 
-    const { qr_code, qr_token, expires_in } = response.data
+    const { qr_code, jwt, expires_in } = response.data;
 
-    // Display QR code
-    const qrDisplay = document.getElementById("qr-display")
-    const qrPlaceholder = document.getElementById("qr-placeholder")
-    const qrInfo = document.getElementById("qr-info")
+    // Display QR code (qr_code is a data URL from the API)
+    const qrDisplay = document.getElementById("qr-display");
+    const qrPlaceholder = document.getElementById("qr-placeholder");
+    const qrInfo = document.getElementById("qr-info");
+    const manualCode = document.getElementById("manual-code");
 
-    qrPlaceholder.innerHTML = `<img src="data:image/png;base64,${qr_code}" alt="QR Code" class="w-48 h-48 mx-auto">`
-    qrInfo.classList.remove("hidden")
+    qrPlaceholder.innerHTML = `<img src="${qr_code}" alt="QR Code" class="w-48 h-48 mx-auto">`;
+    qrInfo.classList.remove("hidden");
+
+    // Display and setup manual code
+    manualCode.textContent = jwt;
+    setupCopyCodeButton(jwt);
 
     // Store current session info
     currentQRSession = {
       qr_code,
-      qr_token,
+      jwt,
       expires_at: new Date(Date.now() + expires_in * 1000),
-    }
+    };
 
     // Start expiry countdown
-    startQRExpiryCountdown(expires_in)
-
-    showSuccess("QR Code generated successfully!")
+    startQRExpiryCountdown(expires_in);
+    
+    showSuccess("QR Code generated successfully!");
   } catch (error) {
-    console.error("Error generating QR code:", error)
-    showError(error.response?.data?.error || "Failed to generate QR code")
+    console.error("Error generating QR code:", error);
+    showError(error.response?.data?.error || "Failed to generate QR code");
   }
 }
+
+function setupCopyCodeButton(code) {
+  const copyBtn = document.getElementById("copy-code");
+  
+  copyBtn.addEventListener("click", async () => {
+    try {
+      await navigator.clipboard.writeText(code);
+      
+      // Visual feedback
+      copyBtn.innerHTML = '<i class="fas fa-check"></i>';
+      copyBtn.classList.add("text-green-600");
+      
+      setTimeout(() => {
+        copyBtn.innerHTML = '<i class="fas fa-copy"></i>';
+        copyBtn.classList.remove("text-green-600");
+      }, 2000);
+      
+      showSuccess("Code copied to clipboard!");
+    } catch (err) {
+      showError("Failed to copy code. Please try selecting and copying manually.");
+    }
+  });
+}
+
 
 function startQRExpiryCountdown(expiresIn) {
   const qrExpires = document.getElementById("qr-expires")
@@ -238,7 +326,8 @@ function downloadQRCode() {
 
   const link = document.createElement("a")
   link.download = `attendance-qr-${Date.now()}.png`
-  link.href = `data:image/png;base64,${currentQRSession.qr_code}`
+  // currentQRSession.qr_code is a data URL (data:image/png;base64,...)
+  link.href = currentQRSession.qr_code
   link.click()
 }
 
@@ -417,6 +506,75 @@ async function saveManualAttendance() {
   }
 }
 
+// --- Camera Attendance Modal Logic ---
+document.addEventListener("DOMContentLoaded", function() {
+  const cameraBtn = document.getElementById("camera-attendance-btn");
+  const cameraModal = document.getElementById("camera-attendance-modal");
+  const closeCameraModal = document.getElementById("close-camera-modal");
+  const video = document.getElementById("camera-attendance-video");
+  const scanBtn = document.getElementById("scan-face-btn");
+  const feedback = document.getElementById("camera-attendance-feedback");
+  const sessionSelect = document.getElementById("camera-session-select");
+  let stream = null;
+
+  if (cameraBtn) {
+    cameraBtn.addEventListener("click", async () => {
+      cameraModal.classList.remove("hidden");
+      // Populate session select (reuse logic from manual attendance)
+      const res = await axios.get("/api/teacher/sessions/today");
+      sessionSelect.innerHTML = '<option value="">Select a session...</option>';
+      res.data.sessions.forEach(s => {
+        sessionSelect.innerHTML += `<option value="${s.id}">${s.subject} - ${s.class_name}</option>`;
+      });
+      // Start webcam
+      if (navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
+        stream = await navigator.mediaDevices.getUserMedia({ video: true });
+        video.srcObject = stream;
+        video.play();
+      }
+    });
+  }
+  if (closeCameraModal) {
+    closeCameraModal.addEventListener("click", () => {
+      cameraModal.classList.add("hidden");
+      feedback.textContent = "";
+      if (stream) {
+        stream.getTracks().forEach(track => track.stop());
+        stream = null;
+      }
+    });
+  }
+  if (scanBtn) {
+    scanBtn.addEventListener("click", async () => {
+      feedback.textContent = "Scanning...";
+      if (!sessionSelect.value) {
+        feedback.textContent = "Select a session first.";
+        return;
+      }
+      // Capture frame
+      const canvas = document.createElement("canvas");
+      canvas.width = video.videoWidth;
+      canvas.height = video.videoHeight;
+      canvas.getContext("2d").drawImage(video, 0, 0);
+      const dataUrl = canvas.toDataURL("image/jpeg");
+      // Send to backend for recognition
+      try {
+        const res = await axios.post("/api/ai/recognize_face", {
+          image: dataUrl,
+          session_id: sessionSelect.value
+        });
+        if (res.data.match) {
+          feedback.textContent = `✅ ${res.data.name} – Attendance Marked`;
+        } else {
+          feedback.textContent = "Unknown face. Try again.";
+        }
+      } catch (err) {
+        feedback.textContent = err.response?.data?.error || "Recognition failed.";
+      }
+    });
+  }
+});
+
 function loadRecentActivity() {
   const activityContainer = document.getElementById("recent-activity")
 
@@ -478,8 +636,21 @@ function loadAttendanceAlerts() {
 }
 
 function generateReport() {
-  // Placeholder for report generation
-  showSuccess("Report generation feature coming soon!")
+  const sessionSelect = document.getElementById('session-select')
+  const sessionId = sessionSelect.value
+  if (!sessionId) {
+    showError('Please select a session to generate report')
+    return
+  }
+
+  // Trigger download of CSV report
+  const url = `/api/teacher/session/${sessionId}/report`
+  const link = document.createElement('a')
+  link.href = url
+  link.target = '_blank'
+  document.body.appendChild(link)
+  link.click()
+  link.remove()
 }
 
 function filterAttendance() {
@@ -513,3 +684,72 @@ function showQRGenerator() {
     behavior: "smooth",
   })
 }
+
+// --- Camera Attendance Modal Logic ---
+document.addEventListener("DOMContentLoaded", function() {
+  const cameraBtn = document.getElementById("camera-attendance-btn");
+  const cameraModal = document.getElementById("camera-attendance-modal");
+  const closeCameraModal = document.getElementById("close-camera-modal");
+  const video = document.getElementById("camera-attendance-video");
+  const scanBtn = document.getElementById("scan-face-btn");
+  const feedback = document.getElementById("camera-attendance-feedback");
+  const sessionSelect = document.getElementById("camera-session-select");
+  let stream = null;
+
+  if (cameraBtn) {
+    cameraBtn.addEventListener("click", async () => {
+      cameraModal.classList.remove("hidden");
+      // Populate session select (reuse logic from manual attendance)
+      const res = await axios.get("/api/teacher/sessions/today");
+      sessionSelect.innerHTML = '<option value="">Select a session...</option>';
+      res.data.sessions.forEach(s => {
+        sessionSelect.innerHTML += `<option value="${s.id}">${s.subject} - ${s.class_name}</option>`;
+      });
+      // Start webcam
+      if (navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
+        stream = await navigator.mediaDevices.getUserMedia({ video: true });
+        video.srcObject = stream;
+        video.play();
+      }
+    });
+  }
+  if (closeCameraModal) {
+    closeCameraModal.addEventListener("click", () => {
+      cameraModal.classList.add("hidden");
+      feedback.textContent = "";
+      if (stream) {
+        stream.getTracks().forEach(track => track.stop());
+        stream = null;
+      }
+    });
+  }
+  if (scanBtn) {
+    scanBtn.addEventListener("click", async () => {
+      feedback.textContent = "Scanning...";
+      if (!sessionSelect.value) {
+        feedback.textContent = "Select a session first.";
+        return;
+      }
+      // Capture frame
+      const canvas = document.createElement("canvas");
+      canvas.width = video.videoWidth;
+      canvas.height = video.videoHeight;
+      canvas.getContext("2d").drawImage(video, 0, 0);
+      const dataUrl = canvas.toDataURL("image/jpeg");
+      // Send to backend for recognition
+      try {
+        const res = await axios.post("/api/ai/recognize_face", {
+          image: dataUrl,
+          session_id: sessionSelect.value
+        });
+        if (res.data.match) {
+          feedback.textContent = `✅ ${res.data.name} – Attendance Marked`;
+        } else {
+          feedback.textContent = "Unknown face. Try again.";
+        }
+      } catch (err) {
+        feedback.textContent = err.response?.data?.error || "Recognition failed.";
+      }
+    });
+  }
+});

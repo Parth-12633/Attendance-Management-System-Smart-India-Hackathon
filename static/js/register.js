@@ -85,4 +85,85 @@ document.addEventListener("DOMContentLoaded", () => {
     document.getElementById("register-error").classList.add("hidden")
     document.getElementById("register-success").classList.add("hidden")
   }
+
+  // --- Face Registration Webcam Logic ---
+  const video = document.getElementById("face-video");
+  const captureBtn = document.getElementById("capture-face-btn");
+  const clearBtn = document.getElementById("clear-faces-btn");
+  const thumbnails = document.getElementById("face-thumbnails");
+  let faceImages = [];
+
+  if (video && navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
+    navigator.mediaDevices.getUserMedia({ video: true })
+      .then(stream => {
+        video.srcObject = stream;
+        video.play();
+      })
+      .catch(() => {
+        video.parentElement.innerHTML = '<span class="text-red-600">Webcam not available</span>';
+      });
+  }
+
+  if (captureBtn) {
+    captureBtn.addEventListener("click", () => {
+      if (faceImages.length >= 5) return;
+      const canvas = document.createElement("canvas");
+      canvas.width = video.videoWidth;
+      canvas.height = video.videoHeight;
+      canvas.getContext("2d").drawImage(video, 0, 0);
+      const dataUrl = canvas.toDataURL("image/jpeg");
+      faceImages.push(dataUrl);
+      const img = document.createElement("img");
+      img.src = dataUrl;
+      img.width = 48;
+      img.height = 36;
+      img.className = "rounded border";
+      thumbnails.appendChild(img);
+    });
+  }
+
+  if (clearBtn) {
+    clearBtn.addEventListener("click", () => {
+      faceImages = [];
+      thumbnails.innerHTML = "";
+    });
+  }
+
+  // Override student registration to include face upload
+  if (studentForm) {
+    studentForm.addEventListener("submit", async (e) => {
+      e.preventDefault();
+      if (faceImages.length < 3) {
+        showMessage("register-error", "Please capture at least 3 face images.", "error");
+        return;
+      }
+      const data = {
+        name: document.getElementById("student-name").value.trim(),
+        roll_no: document.getElementById("student-roll").value.trim(),
+        division: document.getElementById("student-division").value.trim(),
+        standard: document.getElementById("student-standard").value.trim(),
+        password: document.getElementById("student-password").value
+      };
+      hideMessage();
+      let student_id;
+      try {
+        const res = await axios.post("/api/auth/register/student", data);
+        student_id = res.data.student_id || res.data.id;
+      } catch (err) {
+        showMessage("register-error", err.response?.data?.error || "Registration failed", "error");
+        return;
+      }
+      // Upload face images
+      try {
+        await axios.post("/api/ai/register_face", {
+          student_id,
+          images: faceImages
+        });
+        showMessage("register-success", "Registration complete! You can now log in.", "success");
+        setTimeout(() => window.location.href = "/login", 2000);
+      } catch (err) {
+        showMessage("register-error", "Face registration failed. Try again.", "error");
+      }
+    });
+  }
 })

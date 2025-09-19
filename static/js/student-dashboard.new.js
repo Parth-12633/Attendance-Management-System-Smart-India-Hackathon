@@ -14,9 +14,6 @@ document.addEventListener("DOMContentLoaded", function() {
       // Set up QR scanner
       setupQRScanner();
 
-      // Set up camera attendance
-      setupCameraAttendance();
-
       // Load dashboard data
       loadDashboardData();
 
@@ -27,121 +24,6 @@ document.addEventListener("DOMContentLoaded", function() {
       console.error("Error initializing dashboard:", error);
       showError("Failed to initialize dashboard");
     });
-// --- Camera Attendance Modal Logic ---
-function setupCameraAttendance() {
-  const fallbackBtn = document.getElementById("fallback-qr-btn");
-  if (fallbackBtn) {
-    fallbackBtn.addEventListener("click", () => {
-      document.getElementById("camera-attendance-modal").classList.add("hidden");
-      // Show QR scanner section
-      document.getElementById("qr-scanner").classList.remove("hidden");
-      document.getElementById("scan-qr-btn").classList.add("hidden");
-    });
-  }
-  const cameraBtn = document.getElementById("camera-attendance-btn");
-  const cameraModal = document.getElementById("camera-attendance-modal");
-  const closeCameraModal = document.getElementById("close-camera-modal");
-  const video = document.getElementById("camera-attendance-video");
-  const scanBtn = document.getElementById("scan-face-btn");
-  const feedback = document.getElementById("camera-attendance-feedback");
-  let stream = null;
-
-  if (cameraBtn) {
-    cameraBtn.addEventListener("click", async () => {
-      cameraModal.classList.remove("hidden");
-      // Load today's sessions for dropdown
-      try {
-        const res = await axios.get("/api/attendance/sessions/today");
-        const select = document.getElementById("session-select");
-        select.innerHTML = "";
-        if ((res.data.sessions || []).length === 0) {
-          const option = document.createElement("option");
-          option.value = "";
-          option.textContent = "No sessions available";
-          select.appendChild(option);
-        } else {
-          (res.data.sessions || []).forEach(s => {
-            const start = new Date(s.start_time).toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit" });
-            const end = s.end_time ? new Date(s.end_time).toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit" }) : "--:--";
-            const option = document.createElement("option");
-            option.value = s.id;
-            option.textContent = `${s.subject} (${start} - ${end})`;
-            select.appendChild(option);
-          });
-        }
-      } catch (err) {
-        feedback.textContent = "Could not fetch sessions.";
-      }
-      // Start webcam reliably
-      try {
-        if (navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
-          stream = await navigator.mediaDevices.getUserMedia({ video: true });
-          video.srcObject = stream;
-          await video.play();
-        } else {
-          feedback.textContent = "Camera not supported on this device.";
-        }
-      } catch (err) {
-        feedback.textContent = "Unable to access camera. Please check permissions or use a supported device.";
-      }
-    });
-  }
-  if (closeCameraModal) {
-    closeCameraModal.addEventListener("click", () => {
-      cameraModal.classList.add("hidden");
-      feedback.textContent = "";
-      if (stream) {
-        stream.getTracks().forEach(track => track.stop());
-        stream = null;
-      }
-    });
-  }
-  if (scanBtn) {
-    scanBtn.addEventListener("click", async () => {
-      feedback.textContent = "Scanning...";
-      // Get selected session from dropdown
-      const select = document.getElementById("session-select");
-      const sessionId = select.value;
-      if (!sessionId) {
-        feedback.textContent = "Please select a session.";
-        return;
-      }
-      // Capture frame
-      const canvas = document.createElement("canvas");
-      canvas.width = video.videoWidth;
-      canvas.height = video.videoHeight;
-      canvas.getContext("2d").drawImage(video, 0, 0);
-      const dataUrl = canvas.toDataURL("image/jpeg");
-      // Send to backend for recognition
-      try {
-        const res = await axios.post("/api/ai/recognize_face", {
-          image: dataUrl,
-          session_id: sessionId
-        });
-        if (res.data.match) {
-          if (res.data.attendance === "marked") {
-            feedback.textContent = `✅ ${res.data.name} – Attendance Marked`;
-          } else {
-            feedback.textContent = `Already marked for ${res.data.name}`;
-          }
-          // Optionally refresh dashboard
-          setTimeout(() => {
-            loadDashboardData();
-            cameraModal.classList.add("hidden");
-            if (stream) {
-              stream.getTracks().forEach(track => track.stop());
-              stream = null;
-            }
-          }, 2000);
-        } else {
-          feedback.textContent = "Unknown face. Try again.";
-        }
-      } catch (err) {
-        feedback.textContent = err.response?.data?.error || "Recognition failed.";
-      }
-    });
-  }
-}
 });
 
 async function initializeDashboard() {
@@ -244,14 +126,6 @@ function updateAttendanceStats(sessions) {
 }
 
 function setupQRScanner() {
-  const fallbackManualBtn = document.getElementById("fallback-manual-btn");
-  if (fallbackManualBtn) {
-    fallbackManualBtn.addEventListener("click", () => {
-      document.getElementById("qr-scanner").classList.add("hidden");
-      document.getElementById("manual-entry").scrollIntoView({ behavior: "smooth" });
-      document.getElementById("manual-qr-input").focus();
-    });
-  }
   const scanBtn = document.getElementById("scan-qr-btn");
   const stopBtn = document.getElementById("stop-scan-btn");
   const scanner = document.getElementById("qr-scanner");
@@ -264,46 +138,25 @@ function setupQRScanner() {
   scanBtn.addEventListener("click", startQRScanner);
   stopBtn.addEventListener("click", stopQRScanner);
   manualSubmit.addEventListener("click", submitManualQR);
-  // Hide camera when switching modes
-  document.getElementById("camera-attendance-modal").addEventListener("transitionend", () => {
-    if (document.getElementById("camera-attendance-modal").classList.contains("hidden")) {
-      const video = document.getElementById("camera-attendance-video");
-      if (video && video.srcObject) {
-        video.srcObject.getTracks().forEach(track => track.stop());
-        video.srcObject = null;
-      }
-    }
-  });
 
   async function startQRScanner() {
     try {
       // Check if MediaDevices API is available
-      // Show manual input if camera is not supported
       if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
-        showError('Camera not supported on this device. Please use manual code entry below.');
-        document.getElementById("manual-entry").classList.add("mt-4", "border-t", "pt-4");
-        document.getElementById("manual-qr-input").focus();
-        return;
+        throw new Error('Your browser does not support camera access');
       }
 
-      try {
-        // Request camera access
-        stream = await navigator.mediaDevices.getUserMedia({
-          video: { facingMode: "environment" },
-        });
-        video.srcObject = stream;
-        scanner.classList.remove("hidden");
-        scanBtn.classList.add("hidden");
-        scanning = true;
+      // Request camera access
+      stream = await navigator.mediaDevices.getUserMedia({
+        video: { facingMode: "environment" },
+      });
+      video.srcObject = stream;
+      scanner.classList.remove("hidden");
+      scanBtn.classList.add("hidden");
+      scanning = true;
 
-        // Start scanning for QR codes
-        scanForQRCode();
-      } catch (error) {
-        console.error("Camera access error:", error);
-        showError('Camera access failed. Please use manual code entry below.');
-        document.getElementById("manual-entry").classList.add("mt-4", "border-t", "pt-4");
-        document.getElementById("manual-qr-input").focus();
-      }
+      // Start scanning for QR codes
+      scanForQRCode();
     } catch (error) {
       console.error("Error accessing camera:", error);
       let errorMessage = "Unable to access camera. ";
@@ -373,28 +226,19 @@ function setupQRScanner() {
 
   async function processQRCode(qrData) {
     try {
-      let payload = {};
-      
-      // Check if input is a short manual code (6 characters) or QR token
-      if (qrData.length <= 6) {
-        payload = { manual_code: qrData.toUpperCase() };
-      } else {
-        // Handle QR token
-        let qrToken = qrData;
-        
-        // Check if the data is in the format "attendance:token:timetable_id"
-        if (qrData.includes(":")) {
-          const parts = qrData.split(":");
-          if (parts.length === 3 && parts[0] === "attendance") {
-            qrToken = parts[1];
-          }
-        }
-        
-        payload = { qr_token: qrToken };
+      // Extract token from QR data (format: "attendance:token:timetable_id")
+      const parts = qrData.split(":");
+      if (parts.length !== 3 || parts[0] !== "attendance") {
+        showError("Invalid QR code format");
+        return;
       }
 
+      const qrToken = parts[1];
+
       // Submit attendance
-      const response = await axios.post("/api/attendance/mark-qr", payload);
+      const response = await axios.post("/api/attendance/mark-qr", {
+        qr_token: qrToken,
+      });
 
       showSuccess("Attendance marked successfully!");
 

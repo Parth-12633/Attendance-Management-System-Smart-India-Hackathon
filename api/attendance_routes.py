@@ -1,14 +1,50 @@
-from flask import Blueprint, request, jsonify
-from models import db, AttendanceSession, Attendance, Student, Timetable, Class, User, Subject
+from flask import Blueprint, request, jsonify, current_app
+from models import db, AttendanceSession, Attendance, Student, Timetable, Class, User, Subject, Teacher
 from auth import token_required, role_required
-from datetime import datetime, date
+from datetime import datetime, date, timedelta
 import qrcode
 import io
 import base64
 import secrets
 import string
+import jwt
 
 attendance_bp = Blueprint('attendance', __name__, url_prefix='/api/attendance')
+
+@attendance_bp.route('/debug/sessions/today', methods=['GET'])
+def debug_sessions_today():
+    today = date.today()
+    sessions = AttendanceSession.query.filter_by(date=today).all()
+    result = []
+    for s in sessions:
+        tt = Timetable.query.get(s.timetable_id)
+        subj = Subject.query.get(tt.subject_id) if tt else None
+        cls = Class.query.get(tt.class_id) if tt else None
+        teacher = Teacher.query.get(tt.teacher_id) if tt else None
+        result.append({
+            'id': s.id,
+            'class': f"{cls.standard}-{cls.division}" if cls else None,
+            'subject': subj.name if subj else None,
+            'teacher': teacher.user.name if teacher else None,
+            'start_time': s.start_time.isoformat() if s.start_time else None,
+            'end_time': s.end_time.isoformat() if s.end_time else None,
+            'is_active': s.is_active,
+            'attendance_method': s.attendance_method
+        })
+    return jsonify({'sessions': result})
+from flask import Blueprint, request, jsonify, current_app
+from models import db, AttendanceSession, Attendance, Student, Timetable, Class, User, Subject, Teacher
+from auth import token_required, role_required
+from datetime import datetime, date, timedelta
+import qrcode
+import io
+import base64
+import secrets
+import string
+import jwt
+
+attendance_bp = Blueprint('attendance', __name__, url_prefix='/api/attendance')
+
 
 @attendance_bp.route('/generate-qr', methods=['POST'])
 @token_required
@@ -16,42 +52,52 @@ attendance_bp = Blueprint('attendance', __name__, url_prefix='/api/attendance')
 def generate_qr_code(current_user):
     data = request.get_json()
     timetable_id = data.get('timetable_id')
-    
+
     if not timetable_id:
         return jsonify({'error': 'Timetable ID required'}), 400
-    
-    # Generate unique token for QR code
-    qr_token = ''.join(secrets.choice(string.ascii_letters + string.digits) for _ in range(32))
-    
-    # Create attendance session
+
+    # Create attendance session first (inactive until QR used or teacher activates)
     session = AttendanceSession(
         timetable_id=timetable_id,
         date=date.today(),
         start_time=datetime.now(),
-        qr_token=qr_token,
         attendance_method='qr'
     )
-    
-    # Generate QR code
-    qr_data = f"attendance:{qr_token}:{timetable_id}"
+    db.session.add(session)
+    db.session.flush()  # get session.id
+
+    # Generate a jti for this QR and store it on the session
+    jti = ''.join(secrets.choice(string.ascii_letters + string.digits) for _ in range(24))
+    session.qr_token = jti
+
+    # Build JWT payload with short expiry
+    payload = {
+        'session_id': session.id,
+        'jti': jti,
+        'iat': datetime.utcnow(),
+        'exp': datetime.utcnow() + timedelta(minutes=30)
+    }
+    token = jwt.encode(payload, current_app.config['SECRET_KEY'], algorithm='HS256')
+
+    # Generate QR image that encodes the JWT
+    qr_data = token
     qr = qrcode.QRCode(version=1, box_size=10, border=5)
     qr.add_data(qr_data)
     qr.make(fit=True)
-    
-    img = qr.make_image(fill_color="black", back_color="white")
+    img = qr.make_image(fill_color='black', back_color='white')
     buffer = io.BytesIO()
     img.save(buffer, format='PNG')
     qr_code_base64 = base64.b64encode(buffer.getvalue()).decode()
-    
-    session.qr_code = qr_code_base64
-    db.session.add(session)
+
+    # Store QR image (as data URL) and commit
+    session.qr_code = f"data:image/png;base64,{qr_code_base64}"
     db.session.commit()
-    
+
     return jsonify({
         'session_id': session.id,
-        'qr_code': qr_code_base64,
-        'qr_token': qr_token,
-        'expires_in': 3600  # 1 hour
+        'qr_code': session.qr_code,
+        'jwt': token,
+        'expires_in': 30 * 60
     })
 
 @attendance_bp.route('/mark-qr', methods=['POST'])
@@ -59,46 +105,59 @@ def generate_qr_code(current_user):
 @role_required(['student'])
 def mark_attendance_qr(current_user):
     data = request.get_json()
-    qr_token = data.get('qr_token')
-    
-    if not qr_token:
-        return jsonify({'error': 'QR token required'}), 400
-    
-    # Find active session
-    session = AttendanceSession.query.filter_by(
-        qr_token=qr_token,
-        is_active=True
-    ).first()
-    
-    if not session:
-        return jsonify({'error': 'Invalid or expired QR code'}), 400
-    
-    # Check if already marked
+    token = data.get('token') or data.get('jwt') or data.get('qr_token')
+    manual_code = data.get('manual_code')
+
+    if not token and not manual_code:
+        return jsonify({'error': 'QR token or manual code required'}), 400
+
+    session = None
+    subject = None
+
+    if manual_code:
+        # Try to find session by manual code
+        session = AttendanceSession.query.filter_by(
+            manual_code=manual_code,
+            is_active=True,
+            date=date.today()
+        ).first()
+        if not session:
+            return jsonify({'error': 'Invalid or expired manual code'}), 400
+    else:
+        # Handle QR token
+        try:
+            payload = jwt.decode(token, current_app.config['SECRET_KEY'], algorithms=['HS256'])
+            session_id = payload.get('session_id')
+            jti = payload.get('jti')
+            subject = payload.get('subject')
+
+            if not session_id or not jti:
+                return jsonify({'error': 'Invalid QR payload'}), 400
+
+            # Find session and verify stored jti matches
+            session = AttendanceSession.query.filter_by(id=session_id, qr_token=jti, is_active=True).first()
+            if not session:
+                return jsonify({'error': 'Invalid or inactive QR session'}), 400
+        except jwt.ExpiredSignatureError:
+            return jsonify({'error': 'QR code expired'}), 400
+        except Exception:
+            return jsonify({'error': 'Invalid QR token'}), 400
+
+    # Check if student already marked
     student = current_user.student
-    existing = Attendance.query.filter_by(
-        student_id=student.id,
-        session_id=session.id
-    ).first()
-    
+    existing = Attendance.query.filter_by(student_id=student.id, session_id=session.id).first()
     if existing:
         return jsonify({'error': 'Attendance already marked'}), 400
-    
-    # Mark attendance
-    attendance = Attendance(
-        student_id=student.id,
-        session_id=session.id,
-        status='present',
-        marked_by='qr'
-    )
-    
+
+    # Mark attendance (record subject if present in token)
+    attendance = Attendance(student_id=student.id, session_id=session.id, status='present', marked_by='qr', subject=subject)
     db.session.add(attendance)
     db.session.commit()
-    
-    return jsonify({
-        'message': 'Attendance marked successfully',
-        'status': 'present',
-        'marked_at': attendance.marked_at.isoformat()
-    })
+
+    resp = {'message': 'Attendance marked successfully', 'status': 'present', 'marked_at': attendance.marked_at.isoformat()}
+    if subject:
+        resp['subject'] = subject
+    return jsonify(resp)
 
 @attendance_bp.route('/sessions/today', methods=['GET'])
 @token_required
@@ -107,11 +166,15 @@ def get_today_sessions(current_user):
     
     if current_user.role == 'student':
         student = current_user.student
-        # Get sessions for student's class
+        now = datetime.now()
+        # Only show sessions that are active and current time is within start/end
         sessions = db.session.query(AttendanceSession).join(Timetable).join(Class).filter(
             AttendanceSession.date == today,
             Class.standard == student.standard,
-            Class.division == student.division
+            Class.division == student.division,
+            AttendanceSession.is_active == True,
+            AttendanceSession.start_time <= now,
+            (AttendanceSession.end_time == None) | (AttendanceSession.end_time >= now)
         ).all()
     else:
         # Teachers see all sessions they're teaching
@@ -131,18 +194,14 @@ def get_today_sessions(current_user):
             'is_active': session.is_active,
             'attendance_method': session.attendance_method
         }
-        
         if current_user.role == 'student':
-            # Check if student has marked attendance
             attendance = Attendance.query.filter_by(
                 student_id=current_user.student.id,
                 session_id=session.id
             ).first()
             session_info['attendance_status'] = attendance.status if attendance else 'absent'
             session_info['marked_at'] = attendance.marked_at.isoformat() if attendance else None
-        
         session_data.append(session_info)
-    
     return jsonify({'sessions': session_data})
 
 @attendance_bp.route('/report', methods=['GET'])

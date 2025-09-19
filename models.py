@@ -28,6 +28,7 @@ class Student(db.Model):
     interests = db.Column(db.Text, nullable=True)  # JSON string
     career_goals = db.Column(db.Text, nullable=True)
     face_encoding = db.Column(db.Text, nullable=True)  # For face recognition
+    face_images = db.Column(db.Text, nullable=True)  # JSON list of up to 5 base64 images
     
     user = db.relationship('User', backref=db.backref('student', uselist=False))
     
@@ -78,6 +79,7 @@ class AttendanceSession(db.Model):
     end_time = db.Column(db.DateTime, nullable=True)
     qr_code = db.Column(db.Text, nullable=True)  # Base64 encoded QR code
     qr_token = db.Column(db.String(100), unique=True, nullable=True)
+    manual_code = db.Column(db.String(6), unique=True, nullable=True)  # Short manual entry code
     is_active = db.Column(db.Boolean, default=True)
     attendance_method = db.Column(db.String(20), default='manual')  # manual, qr, bluetooth, face
     
@@ -88,6 +90,7 @@ class Attendance(db.Model):
     student_id = db.Column(db.Integer, db.ForeignKey('student.id'), nullable=False)
     session_id = db.Column(db.Integer, db.ForeignKey('attendance_session.id'), nullable=False)
     status = db.Column(db.String(20), default='present')  # present, absent, late
+    subject = db.Column(db.String(100), nullable=True)
     marked_at = db.Column(db.DateTime, default=datetime.utcnow)
     marked_by = db.Column(db.String(20), default='system')  # system, teacher, qr, bluetooth, face
     confidence_score = db.Column(db.Float, nullable=True)  # For face recognition

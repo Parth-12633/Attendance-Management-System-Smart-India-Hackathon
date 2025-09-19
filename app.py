@@ -22,6 +22,38 @@ from extensions import db
 
 app = Flask(__name__)
 
+# Compatibility shims: patch Response.set_cookie and Response.delete_cookie to ignore unknown kwargs (like 'partitioned')
+try:
+    from werkzeug.wrappers import Response as _WResponse
+    import inspect
+
+    # Patch set_cookie
+    sig = inspect.signature(_WResponse.set_cookie)
+    if 'partitioned' not in sig.parameters:
+        _orig_set_cookie = _WResponse.set_cookie
+        def _set_cookie_compat(self, key, value='', max_age=None, expires=None,
+                                path='/', domain=None, secure=False, httponly=False,
+                                samesite=None, **kwargs):
+            # Drop unsupported kwargs (e.g., partitioned) and call original
+            return _orig_set_cookie(self, key, value=value, max_age=max_age,
+                                     expires=expires, path=path, domain=domain,
+                                     secure=secure, httponly=httponly, samesite=samesite)
+        _WResponse.set_cookie = _set_cookie_compat
+
+    # Patch delete_cookie
+    sig_del = inspect.signature(_WResponse.delete_cookie)
+    if 'partitioned' not in sig_del.parameters:
+        _orig_delete_cookie = _WResponse.delete_cookie
+        def _delete_cookie_compat(self, key, path='/', domain=None, secure=False, httponly=False,
+                                  samesite=None, **kwargs):
+            # Drop unsupported kwargs (e.g., partitioned) and call original
+            return _orig_delete_cookie(self, key, path=path, domain=domain, secure=secure,
+                                       httponly=httponly, samesite=samesite)
+        _WResponse.delete_cookie = _delete_cookie_compat
+except Exception:
+    # If anything goes wrong, don't crash app startup; let runtime errors surface.
+    pass
+
 # Flask configuration
 app.config.update(
     SECRET_KEY=os.environ.get('SECRET_KEY', 'dev-secret-key-change-in-production'),
@@ -57,20 +89,27 @@ migrate = Migrate(app, db)
 from models import *
 from auth import *
 
-# Register API blueprints
-from api.auth_routes import auth_bp
-from api.attendance_routes import attendance_bp
-from api.student_routes import student_bp
-from api.teacher_routes import teacher_bp
-from api.admin_routes import admin_bp
-from api.ai_routes import ai_bp
+# Register API blueprints (defensive imports so optional/heavy deps don't break app import)
+def _try_register(bp_module, bp_name, url_prefix=None):
+    try:
+        mod = __import__(bp_module, fromlist=[bp_name])
+        bp = getattr(mod, bp_name)
+        if url_prefix:
+            app.register_blueprint(bp, url_prefix=url_prefix)
+        else:
+            app.register_blueprint(bp)
+        print(f"Registered blueprint: {bp_module}.{bp_name}")
+    except Exception as e:
+        # Log to stdout; don't crash app import
+        print(f"Could not register blueprint {bp_module}.{bp_name}: {e}")
 
-app.register_blueprint(auth_bp)
-app.register_blueprint(attendance_bp)
-app.register_blueprint(student_bp)
-app.register_blueprint(teacher_bp)
-app.register_blueprint(admin_bp)
-app.register_blueprint(ai_bp, url_prefix='/api/ai')
+
+_try_register('api.auth_routes', 'auth_bp')
+_try_register('api.attendance_routes', 'attendance_bp')
+_try_register('api.student_routes', 'student_bp')
+_try_register('api.teacher_routes', 'teacher_bp')
+_try_register('api.admin_routes', 'admin_bp')
+_try_register('api.ai_routes', 'ai_bp', url_prefix='/api/ai')
 
 @app.route('/')
 def index():
