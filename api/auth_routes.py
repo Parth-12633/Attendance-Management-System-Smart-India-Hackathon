@@ -140,7 +140,14 @@ def register_student():
     # Create student
     student = Student(user_id=user.id, roll_no=data['roll_no'], division=data['division'], standard=data['standard'])
     db.session.add(student)
-    db.session.commit()
+    try:
+        db.session.commit()
+    except Exception as e:
+        db.session.rollback()
+        from sqlalchemy.exc import IntegrityError
+        if isinstance(e, IntegrityError):
+            return jsonify({'error': 'Student with this Roll No, Division, and Standard already exists'}), 409
+        return jsonify({'error': 'Registration failed', 'details': str(e)}), 500
     return jsonify({'message': 'Student registered successfully'}), 201
 @auth_bp.route('/register/teacher', methods=['POST'])
 def register_teacher():

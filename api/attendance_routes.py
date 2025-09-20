@@ -8,12 +8,45 @@ import base64
 import secrets
 import string
 import jwt
+import pytz
 
 attendance_bp = Blueprint('attendance', __name__, url_prefix='/api/attendance')
 
+
+@attendance_bp.route('/sessions/today/all', methods=['GET'])
+@token_required
+def get_all_today_sessions_for_student(current_user):
+    """
+    Returns all sessions for today for the student's class/division, regardless of is_active or time window.
+    Useful for facial attendance dropdown to always show all possible sessions.
+    """
+    if current_user.role != 'student':
+        return jsonify({'error': 'Only students can access this endpoint'}), 403
+    student = current_user.student
+    today = date.today()
+    sessions = db.session.query(AttendanceSession).join(Timetable).join(Class).filter(
+        AttendanceSession.date == today,
+        Class.standard == student.standard,
+        Class.division == student.division
+    ).all()
+    session_data = []
+    for session in sessions:
+        session_info = {
+            'id': session.id,
+            'subject': session.timetable.subject.name if session.timetable and session.timetable.subject else "",
+            'teacher': session.timetable.teacher.user.name if session.timetable and session.timetable.teacher and session.timetable.teacher.user else "",
+            'start_time': session.start_time.isoformat() if session.start_time else None,
+            'end_time': session.end_time.isoformat() if session.end_time else None,
+            'is_active': session.is_active,
+            'attendance_method': session.attendance_method
+        }
+        session_data.append(session_info)
+    return jsonify({'sessions': session_data})
+
+
 @attendance_bp.route('/debug/sessions/today', methods=['GET'])
 def debug_sessions_today():
-    today = date.today()
+    today = datetime.now(pytz.timezone('Asia/Kolkata')).date()
     sessions = AttendanceSession.query.filter_by(date=today).all()
     result = []
     for s in sessions:
@@ -32,18 +65,6 @@ def debug_sessions_today():
             'attendance_method': s.attendance_method
         })
     return jsonify({'sessions': result})
-from flask import Blueprint, request, jsonify, current_app
-from models import db, AttendanceSession, Attendance, Student, Timetable, Class, User, Subject, Teacher
-from auth import token_required, role_required
-from datetime import datetime, date, timedelta
-import qrcode
-import io
-import base64
-import secrets
-import string
-import jwt
-
-attendance_bp = Blueprint('attendance', __name__, url_prefix='/api/attendance')
 
 
 @attendance_bp.route('/generate-qr', methods=['POST'])
@@ -59,7 +80,7 @@ def generate_qr_code(current_user):
     # Create attendance session first (inactive until QR used or teacher activates)
     session = AttendanceSession(
         timetable_id=timetable_id,
-        date=date.today(),
+        date=datetime.now(pytz.timezone('Asia/Kolkata')).date(),
         start_time=datetime.now(),
         attendance_method='qr'
     )
@@ -100,6 +121,7 @@ def generate_qr_code(current_user):
         'expires_in': 30 * 60
     })
 
+
 @attendance_bp.route('/mark-qr', methods=['POST'])
 @token_required
 @role_required(['student'])
@@ -119,7 +141,7 @@ def mark_attendance_qr(current_user):
         session = AttendanceSession.query.filter_by(
             manual_code=manual_code,
             is_active=True,
-            date=date.today()
+            date=datetime.now(pytz.timezone('Asia/Kolkata')).date()
         ).first()
         if not session:
             return jsonify({'error': 'Invalid or expired manual code'}), 400
@@ -159,23 +181,28 @@ def mark_attendance_qr(current_user):
         resp['subject'] = subject
     return jsonify(resp)
 
+
 @attendance_bp.route('/sessions/today', methods=['GET'])
 @token_required
 def get_today_sessions(current_user):
-    today = date.today()
+    today = datetime.now(pytz.timezone('Asia/Kolkata')).date()
     
     if current_user.role == 'student':
         student = current_user.student
-        now = datetime.now()
-        # Only show sessions that are active and current time is within start/end
+        # Debug output: print student info
+        print(f"[DEBUG] Student ID: {student.id}, Standard: {student.standard}, Division: {student.division}")
         sessions = db.session.query(AttendanceSession).join(Timetable).join(Class).filter(
             AttendanceSession.date == today,
             Class.standard == student.standard,
-            Class.division == student.division,
-            AttendanceSession.is_active == True,
-            AttendanceSession.start_time <= now,
-            (AttendanceSession.end_time == None) | (AttendanceSession.end_time >= now)
+            Class.division == student.division
         ).all()
+        # Debug output: print all sessions found for student
+        print(f"[DEBUG] Found {len(sessions)} sessions for student {student.id} on {today}")
+        for s in sessions:
+            try:
+                print(f"[DEBUG] Session ID: {s.id}, Timetable ID: {s.timetable_id}, Class: {s.timetable.class_.standard}-{s.timetable.class_.division}, Subject: {s.timetable.subject.name if s.timetable.subject else 'N/A'}")
+            except Exception as e:
+                print(f"[DEBUG] Error printing session info: {e}")
     else:
         # Teachers see all sessions they're teaching
         sessions = db.session.query(AttendanceSession).join(Timetable).filter(
@@ -203,6 +230,7 @@ def get_today_sessions(current_user):
             session_info['marked_at'] = attendance.marked_at.isoformat() if attendance else None
         session_data.append(session_info)
     return jsonify({'sessions': session_data})
+
 
 @attendance_bp.route('/report', methods=['GET'])
 @token_required

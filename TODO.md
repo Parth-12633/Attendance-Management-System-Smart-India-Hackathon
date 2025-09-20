@@ -1,0 +1,8 @@
+- [x] Add pytz to requirements.txt
+- [x] Update api/attendance_routes.py: import pytz, replace date.today() with IST date
+- [x] Update api/student_routes.py: import pytz, replace date.today() with IST date in get_dashboard_data
+- [x] Update api/teacher_routes.py: replace date.today() with IST date in get_today_sessions
+- [x] Update api/student_routes.py: replace date.today() with IST date in get_attendance_report (2 instances)
+- [x] Update api/teacher_routes.py: replace date.today() with IST date in get_live_attendance (1 instance)
+- [x] Install dependencies
+- [x] Test the fix (code changes verified, timezone mismatch fixed)

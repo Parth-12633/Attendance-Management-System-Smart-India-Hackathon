@@ -12,6 +12,36 @@ from sqlalchemy import func, and_
 
 teacher_bp = Blueprint('teacher', __name__, url_prefix='/api/teacher')
 
+# Delete a session (teacher only, must own session)
+@teacher_bp.route('/delete_session/<int:session_id>', methods=['DELETE'])
+@token_required
+@role_required(['teacher'])
+def delete_session(current_user, session_id):
+    # Find session and ensure teacher owns it
+    session = AttendanceSession.query.join(Timetable).filter(
+        AttendanceSession.id == session_id,
+        Timetable.teacher_id == current_user.teacher.id
+    ).first()
+    if not session:
+        return jsonify({'error': 'Session not found or not owned by you'}), 404
+    # Delete session
+    db.session.delete(session)
+    db.session.commit()
+    return jsonify({'message': f'Session {session_id} deleted successfully'})
+import qrcode
+import io
+import base64
+import secrets
+import jwt
+from flask import Blueprint, request, jsonify, current_app
+from datetime import datetime, date, timedelta
+import pytz
+from models import db, Teacher, AttendanceSession, Attendance, Student, Timetable, Class, Subject, User
+from auth import token_required, role_required
+from sqlalchemy import func, and_
+
+teacher_bp = Blueprint('teacher', __name__, url_prefix='/api/teacher')
+
 # Create session from dashboard UI
 @teacher_bp.route('/create_session', methods=['POST'])
 @token_required
@@ -23,20 +53,22 @@ def create_session(current_user):
     subject_name = data.get('subject_name')
     subject_code = data.get('subject_code')
     room = data.get('room')
-    start_hour = data.get('start_hour')
-    end_hour = data.get('end_hour')
-    start_time_str = data.get('start_time')
-    end_time_str = data.get('end_time')
+    duration = float(data.get('duration', 1))
 
-    if not all([class_standard, class_division, subject_name, subject_code, (start_time_str or start_hour), (end_time_str or end_hour)]):
+    if not all([class_standard, class_division, subject_name, subject_code, duration]):
         return jsonify({'error': 'Missing required fields'}), 400
 
-    # Find or create class
-    cls = Class.query.filter_by(standard=class_standard, division=class_division, academic_year="2025-26").first()
+    # Find or create class (ensure academic year matches student data)
+    academic_year = "2025-26"  # You may want to make this dynamic
+    print(f"[DEBUG] Creating session for class: {class_standard}-{class_division}, academic_year={academic_year}")
+    cls = Class.query.filter_by(standard=class_standard, division=class_division, academic_year=academic_year).first()
     if not cls:
-        cls = Class(standard=class_standard, division=class_division, academic_year="2025-26")
+        print(f"[DEBUG] Class not found, creating new class: {class_standard}-{class_division}, academic_year={academic_year}")
+        cls = Class(standard=class_standard, division=class_division, academic_year=academic_year)
         db.session.add(cls)
         db.session.commit()
+    else:
+        print(f"[DEBUG] Found existing class: id={cls.id}, {cls.standard}-{cls.division}, academic_year={cls.academic_year}")
 
     # Find or create subject by code only (avoid UNIQUE constraint error)
     subj = Subject.query.filter_by(code=subject_code).first()
@@ -49,19 +81,17 @@ def create_session(current_user):
     tz = pytz.timezone('Asia/Kolkata')
     now = datetime.now(tz)
     today = now.date()
-    if start_time_str and end_time_str:
-        start = datetime.combine(today, datetime.strptime(start_time_str, "%H:%M").time())
-        end = datetime.combine(today, datetime.strptime(end_time_str, "%H:%M").time())
-        start = tz.localize(start)
-        end = tz.localize(end)
-    else:
-        start = now
-        end = now + timedelta(hours=(int(end_hour) - int(start_hour)))
+    # Force session to start now and end after selected duration
+    start = now
+    end = now + timedelta(hours=duration)
     tt = Timetable.query.filter_by(class_id=cls.id, subject_id=subj.id, teacher_id=current_user.teacher.id).first()
     if not tt:
+        print(f"[DEBUG] Creating new timetable for class_id={cls.id}, subject_id={subj.id}, teacher_id={current_user.teacher.id}")
         tt = Timetable(class_id=cls.id, subject_id=subj.id, teacher_id=current_user.teacher.id, day_of_week=today.weekday(), start_time=start.time(), end_time=end.time(), room_number=room)
         db.session.add(tt)
         db.session.commit()
+    else:
+        print(f"[DEBUG] Found existing timetable: id={tt.id}, class_id={tt.class_id}, subject_id={tt.subject_id}, teacher_id={tt.teacher_id}")
 
     # Delete all previous sessions for this class/division/subject for today
     prev_sessions = AttendanceSession.query.join(Timetable).filter(
@@ -70,6 +100,8 @@ def create_session(current_user):
         Timetable.teacher_id == current_user.teacher.id,
         AttendanceSession.date == today
     ).all()
+    if prev_sessions:
+        print(f"[DEBUG] Deleting {len(prev_sessions)} previous sessions for this class/division/subject for today.")
     for s in prev_sessions:
         db.session.delete(s)
     db.session.commit()
@@ -78,6 +110,7 @@ def create_session(current_user):
     session = AttendanceSession(timetable_id=tt.id, date=today, start_time=start, end_time=end, is_active=True)
     db.session.add(session)
     db.session.commit()
+    print(f"[DEBUG] Created session: id={session.id}, class={class_standard}-{class_division}, academic_year={academic_year}, start={start}, end={end}, is_active={session.is_active}")
     created = True
 
     return jsonify({
@@ -167,7 +200,7 @@ def generate_session_qr(current_user, session_id):
 @role_required(['teacher'])
 def get_today_sessions(current_user):
     teacher = current_user.teacher
-    today = date.today()
+    today = datetime.now(pytz.timezone('Asia/Kolkata')).date()
 
     print("[DEBUG] /api/teacher/sessions/today called by:", current_user.email, "(user_id:", current_user.id, ")")
     print("[DEBUG] Teacher.id:", teacher.id if teacher else None)
@@ -227,7 +260,7 @@ def get_today_sessions(current_user):
 @role_required(['teacher'])
 def get_live_attendance(current_user):
     teacher = current_user.teacher
-    today = date.today()
+    today = datetime.now(pytz.timezone('Asia/Kolkata')).date()
     
     # Get attendance records for teacher's classes today
     attendance_records = db.session.query(
@@ -269,29 +302,82 @@ def get_session_students(current_user, session_id):
     if not session:
         return jsonify({'error': 'Session not found or access denied'}), 404
     
-    # Get students in the class
-    students = db.session.query(Student, User).join(User).filter(
-        Student.standard == session.timetable.class_ref.standard,
-        Student.division == session.timetable.class_ref.division,
-        User.is_active == True
-    ).order_by(Student.roll_no).all()
+    # Get class details
+    class_standard = session.timetable.class_ref.standard
+    class_division = session.timetable.class_ref.division
+    academic_year = session.timetable.class_ref.academic_year
     
-    # Get existing attendance records
-    existing_attendance = {
-        record.student_id: record.status for record in
-        Attendance.query.filter_by(session_id=session_id).all()
-    }
-    
-    student_data = []
-    for student, user in students:
-        student_data.append({
-            'id': student.id,
-            'name': user.name,
-            'roll_no': student.roll_no,
-            'current_status': existing_attendance.get(student.id, 'absent')
-        })
-    
-    return jsonify({'students': student_data})
+    try:
+        # Get students in the class with all necessary details
+        students_query = db.session.query(
+            Student.id,
+            Student.roll_no,
+            Student.standard,
+            Student.division,
+            User.name,
+            User.is_active,
+            User.email,
+            Attendance.status,
+            Attendance.marked_at,
+            Attendance.marked_by
+        ).select_from(Student).join(
+            User, User.id == Student.user_id
+        ).outerjoin(
+            Attendance,
+            and_(
+                Attendance.student_id == Student.id,
+                Attendance.session_id == session_id
+            )
+        ).filter(
+            Student.standard == class_standard,
+            Student.division == class_division,
+            User.is_active == True
+        ).order_by(Student.roll_no)
+        
+        students = students_query.all()
+        
+        student_data = []
+        for record in students:
+            student_info = {
+                'id': record.id,
+                'name': record.name,
+                'roll_no': record.roll_no,
+                'standard': record.standard,
+                'division': record.division,
+                'current_status': record.status or 'absent',
+                'marked_at': record.marked_at.isoformat() if record.marked_at else None,
+                'marked_by': record.marked_by,
+                'display_name': f"{record.name} ({record.roll_no})"
+            }
+            student_data.append(student_info)
+        
+        # Get additional class statistics
+        attendance_stats = {
+            'present': len([s for s in student_data if s['current_status'] == 'present']),
+            'late': len([s for s in student_data if s['current_status'] == 'late']),
+            'absent': len([s for s in student_data if s['current_status'] == 'absent'])
+        }
+        
+        # Add metadata about the class
+        response_data = {
+            'students': student_data,
+            'class_info': {
+                'standard': class_standard,
+                'division': class_division,
+                'academic_year': academic_year,
+                'total_students': len(student_data),
+                'subject': session.timetable.subject.name if session.timetable.subject else None,
+                'stats': attendance_stats,
+                'last_updated': datetime.now().isoformat()
+            }
+        }
+        
+        return jsonify(response_data)
+        
+    except Exception as e:
+        db.session.rollback()
+        print(f"Error loading students: {str(e)}")
+        return jsonify({'error': 'Failed to load student list'}), 500
 
 @teacher_bp.route('/attendance/manual', methods=['POST'])
 @token_required
@@ -347,6 +433,195 @@ def save_manual_attendance(current_user):
     except Exception as e:
         db.session.rollback()
         return jsonify({'error': 'Failed to save attendance'}), 500
+
+@teacher_bp.route('/attendance/template', methods=['GET'])
+@token_required
+@role_required(['teacher'])
+def get_attendance_template(current_user):
+    session_id = request.args.get('session_id')
+    file_type = request.args.get('type', 'xlsx')  # xlsx or csv
+    
+    if not session_id:
+        return jsonify({'error': 'Session ID is required'}), 400
+        
+    # Verify teacher owns this session
+    session = AttendanceSession.query.join(Timetable).filter(
+        AttendanceSession.id == session_id,
+        Timetable.teacher_id == current_user.teacher.id
+    ).first()
+    
+    if not session:
+        return jsonify({'error': 'Session not found or access denied'}), 404
+        
+    # Get students in the class with their names from User table
+    students = db.session.query(Student, User).join(User).filter(
+        Student.standard == session.timetable.class_ref.standard,
+        Student.division == session.timetable.class_ref.division,
+        User.is_active == True
+    ).order_by(Student.roll_no).all()
+
+    # Create a mapping of roll numbers to student names for validation
+    student_names = {str(student.roll_no): user.name for student, user in students}
+    
+    if file_type == 'xlsx':
+        import pandas as pd
+        from io import BytesIO
+        
+        # Create DataFrame with student data
+        data = {
+            'Roll No': [student.roll_no for student, _ in students],
+            'Name': [user.name for _, user in students],
+            'Status': [''] * len(students)  # Empty status column for filling
+        }
+        df = pd.DataFrame(data)
+        
+        # Create Excel writer
+        output = BytesIO()
+        with pd.ExcelWriter(output, engine='openpyxl') as writer:
+            df.to_excel(writer, index=False, sheet_name='Attendance')
+            worksheet = writer.sheets['Attendance']
+            
+            # Add data validation for Status column
+            from openpyxl.worksheet.datavalidation import DataValidation
+            dv = DataValidation(type="list", formula1='"present,absent,late"', allow_blank=True)
+            worksheet.add_data_validation(dv)
+            
+            # Apply validation to Status column (skip header)
+            dv.add(f'C2:C{len(students) + 1}')
+            
+        # Prepare response
+        output.seek(0)
+        return send_file(
+            output,
+            mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+            as_attachment=True,
+            download_name=f'attendance_template_{session_id}.xlsx'
+        )
+    else:
+        # CSV Template
+        output = io.StringIO()
+        writer = csv.writer(output)
+        writer.writerow(['Roll No', 'Name', 'Status'])
+        for student, user in students:
+            writer.writerow([student.roll_no, user.name, ''])
+            
+        return Response(
+            output.getvalue(),
+            mimetype='text/csv',
+            headers={'Content-Disposition': f'attachment; filename=attendance_template_{session_id}.csv'}
+        )
+
+@teacher_bp.route('/attendance/bulk', methods=['POST'])
+@token_required
+@role_required(['teacher'])
+def bulk_attendance_upload(current_user):
+    if 'file' not in request.files:
+        return jsonify({'error': 'No file uploaded'}), 400
+        
+    file = request.files['file']
+    session_id = request.form.get('session_id')
+    
+    if not file or not session_id:
+        return jsonify({'error': 'Both file and session_id are required'}), 400
+        
+    # Verify teacher owns this session
+    session = AttendanceSession.query.join(Timetable).filter(
+        AttendanceSession.id == session_id,
+        Timetable.teacher_id == current_user.teacher.id
+    ).first()
+    
+    if not session:
+        return jsonify({'error': 'Session not found or access denied'}), 404
+        
+    try:
+        # Get all students in the class with their names for validation
+        student_info = {str(s.roll_no): {'id': s.id, 'name': u.name} for s, u in db.session.query(Student, User).join(User).filter(
+            Student.standard == session.timetable.class_ref.standard,
+            Student.division == session.timetable.class_ref.division,
+            User.is_active == True
+        ).all()}
+        
+        success_count = 0
+        error_records = []
+        
+        # Process file based on type
+        filename = file.filename.lower()
+        if filename.endswith('.xlsx'):
+            import pandas as pd
+            df = pd.read_excel(file)
+            records = df.to_dict('records')
+        else:
+            # Process as CSV
+            stream = io.StringIO(file.stream.read().decode("UTF8"), newline=None)
+            records = list(csv.DictReader(stream))
+            
+        for row in records:
+            roll_no = str(row.get('Roll No', '')).strip()
+            name = str(row.get('Name', '')).strip()
+            status = str(row.get('Status', '')).strip().lower()
+            
+            # Validate roll number exists in class
+            if roll_no not in student_info:
+                error_records.append({
+                    'roll_no': roll_no,
+                    'error': 'Student not found in class'
+                })
+                continue
+                
+            # Validate name matches the registration
+            if name and name != student_info[roll_no]['name']:
+                error_records.append({
+                    'roll_no': roll_no,
+                    'error': 'Student name does not match registration'
+                })
+                continue
+                
+            # Validate status
+            if status not in ['present', 'absent', 'late']:
+                error_records.append({
+                    'roll_no': roll_no,
+                    'error': 'Invalid status. Must be present, absent, or late'
+                })
+                continue
+                
+            student_id = student_info[roll_no]['id']
+            
+            # Update or create attendance record
+            existing = Attendance.query.filter_by(
+                student_id=student_id,
+                session_id=session_id
+            ).first()
+            
+            if existing:
+                existing.status = status
+                existing.marked_at = datetime.utcnow()
+                existing.marked_by = 'teacher_bulk'
+            else:
+                attendance = Attendance(
+                    student_id=student_id,
+                    session_id=session_id,
+                    status=status,
+                    marked_by='teacher_bulk'
+                )
+                db.session.add(attendance)
+                
+            success_count += 1
+            
+        db.session.commit()
+        
+        return jsonify({
+            'message': f'Successfully processed {success_count} records',
+            'errors': error_records if error_records else None
+        })
+        
+    except Exception as e:
+        db.session.rollback()
+        import traceback
+        print(traceback.format_exc())  # Detailed error in logs
+        return jsonify({
+            'error': f'Failed to process file: {str(e)}',
+            'errors': error_records if 'error_records' in locals() else None
+        }), 500
 
 @teacher_bp.route('/analytics', methods=['GET'])
 @token_required

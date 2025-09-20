@@ -1,7 +1,14 @@
+from flask import Flask
 from app import app
 import socket
 import qrcode
 from io import StringIO
+
+# Push an application context
+ctx = app.app_context()
+ctx.push()
+
+
 
 def get_local_ip():
     try:

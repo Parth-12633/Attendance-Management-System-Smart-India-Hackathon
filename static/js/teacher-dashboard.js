@@ -63,6 +63,16 @@ function setupEventListeners() {
   addListener("save-manual-attendance", "click", saveManualAttendance);
   addListener("manual-session-select", "change", loadStudentList);
 
+  // Manual Attendance Tabs
+  addListener("individual-tab", "click", () => switchAttendanceMode('individual'));
+  addListener("bulk-tab", "click", () => switchAttendanceMode('bulk'));
+  
+  // Bulk Upload
+  addListener("download-xlsx-template", "click", downloadXLSXTemplate);
+  addListener("download-csv-template", "click", downloadCSVTemplate);
+  addListener("file-upload", "change", handleFileSelect);
+  addListener("remove-file", "click", removeSelectedFile);
+
   // Camera Attendance
   // Camera attendance is now student-only; remove event listeners for teacher dashboard
 
@@ -78,14 +88,11 @@ async function submitCreateSessionForm() {
   const subjectName = document.getElementById("create-subject-name").value.trim();
   const subjectCode = document.getElementById("create-subject-code").value.trim();
   const room = document.getElementById("create-room-number").value.trim();
-  const startTime = document.getElementById("create-session-start").value;
-  const endTime = document.getElementById("create-session-end").value;
-
-  if (!standard || !division || !subjectName || !subjectCode || !startTime || !endTime) {
+  const duration = document.getElementById("create-session-duration").value;
+  if (!standard || !division || !subjectName || !subjectCode || !duration) {
     showError("Please fill in all required fields.");
     return;
   }
-
   try {
     const response = await axios.post("/api/teacher/create_session", {
       class_standard: standard,
@@ -93,8 +100,7 @@ async function submitCreateSessionForm() {
       subject_name: subjectName,
       subject_code: subjectCode,
       room: room,
-      start_time: startTime,
-      end_time: endTime
+      duration: duration
     });
     showSuccess("Session created successfully!");
     document.getElementById("create-session-modal").classList.add("hidden");
@@ -160,16 +166,16 @@ function populateSessionSelects(sessions) {
 }
 
 function displayTeacherSchedule(sessions) {
-  const scheduleContainer = document.getElementById("teacher-schedule")
+  const scheduleContainer = document.getElementById("teacher-schedule");
 
   if (!sessions || sessions.length === 0) {
     scheduleContainer.innerHTML = `
-            <div class="text-center py-8 text-gray-500">
-                <i class="fas fa-calendar-times text-3xl mb-3"></i>
-                <p>No classes scheduled for today</p>
-            </div>
-        `
-    return
+      <div class="text-center py-8 text-gray-500">
+        <i class="fas fa-calendar-times text-3xl mb-3"></i>
+        <p>No sessions scheduled for today</p>
+      </div>
+    `;
+    return;
   }
 
   scheduleContainer.innerHTML = sessions
@@ -177,36 +183,51 @@ function displayTeacherSchedule(sessions) {
       const startTime = new Date(session.start_time).toLocaleTimeString("en-US", {
         hour: "2-digit",
         minute: "2-digit",
-      })
-      const endTime = new Date(session.end_time).toLocaleTimeString("en-US", {
+      });
+      const endTime = session.end_time ? new Date(session.end_time).toLocaleTimeString("en-US", {
         hour: "2-digit",
         minute: "2-digit",
-      })
-
-      const statusClass = session.is_active ? "bg-green-100 text-green-800" : "bg-gray-100 text-gray-800"
-
+      }) : "--:--";
+      const status = session.is_active ? "Active" : "Scheduled";
       return `
-            <div class="flex items-center justify-between p-4 border border-gray-200 rounded-lg hover:bg-gray-50 transition-colors">
-                <div class="flex items-center">
-                    <div class="w-12 h-12 bg-indigo-100 rounded-lg flex items-center justify-center mr-4">
-                        <i class="fas fa-chalkboard-teacher text-indigo-600"></i>
-                    </div>
-                    <div>
-                        <h4 class="font-semibold text-gray-900">${session.subject}</h4>
-                        <p class="text-sm text-gray-600">${session.class_name} • ${session.room_number || "Room TBA"}</p>
-                        <p class="text-sm text-gray-500">${startTime} - ${endTime}</p>
-                    </div>
-                </div>
-                <div class="text-right">
-                    <span class="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${statusClass}">
-                        ${session.is_active ? "Active" : "Scheduled"}
-                    </span>
-                    <p class="text-sm text-gray-500 mt-1">${session.attendance_count || 0} students marked</p>
-                </div>
+        <div class="flex items-center justify-between p-4 border border-gray-200 rounded-lg hover:bg-gray-50 transition-colors">
+          <div class="flex items-center">
+            <div class="w-12 h-12 bg-indigo-100 rounded-lg flex items-center justify-center mr-4">
+              <i class="fas fa-book text-indigo-600"></i>
             </div>
-        `
+            <div>
+              <h4 class="font-semibold text-gray-900">${session.subject}</h4>
+              <p class="text-sm text-gray-600">${session.class_name} • ${startTime} - ${endTime}</p>
+            </div>
+          </div>
+          <div class="text-right flex flex-col items-end gap-2">
+            <span class="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${status === "Active" ? "bg-green-100 text-green-800" : "bg-yellow-100 text-yellow-800"}">
+              ${status}
+            </span>
+            <button class="delete-session-btn bg-red-500 hover:bg-red-600 text-white text-xs px-3 py-1 rounded mt-1" data-session-id="${session.id}">
+              <i class="fas fa-trash-alt mr-1"></i>Delete
+            </button>
+          </div>
+        </div>
+      `;
     })
-    .join("")
+    .join("");
+
+  // Add event listeners for delete buttons
+  document.querySelectorAll(".delete-session-btn").forEach(btn => {
+    btn.addEventListener("click", async (e) => {
+      const sessionId = btn.getAttribute("data-session-id");
+      if (confirm("Are you sure you want to delete this session?")) {
+        try {
+          await axios.delete(`/api/teacher/delete_session/${sessionId}`);
+          showSuccess("Session deleted successfully!");
+          await loadDashboardData();
+        } catch (err) {
+          showError(err.response?.data?.error || "Failed to delete session");
+        }
+      }
+    });
+  });
 }
 
 function toggleGenerateButton() {
@@ -409,7 +430,35 @@ function updateTeacherStats(sessions) {
 }
 
 async function openManualAttendance() {
-  document.getElementById("manual-attendance-modal").classList.remove("hidden")
+  document.getElementById("manual-attendance-modal").classList.remove("hidden");
+  
+  try {
+    // Fetch today's sessions
+    const response = await axios.get("/api/teacher/sessions/today");
+    const sessions = response.data.sessions;
+    
+    // Populate session select
+    const sessionSelect = document.getElementById("manual-session-select");
+    sessionSelect.innerHTML = '<option value="">Select a session...</option>';
+    
+    sessions.forEach(session => {
+      const startTime = new Date(session.start_time).toLocaleTimeString("en-US", {
+        hour: "2-digit",
+        minute: "2-digit",
+      });
+      const option = document.createElement('option');
+      option.value = session.id;
+      option.textContent = `${session.subject} - ${session.class_name} (${startTime})`;
+      sessionSelect.appendChild(option);
+    });
+
+    if (sessions.length === 0) {
+      showError("No active sessions found for today");
+    }
+  } catch (error) {
+    console.error("Error loading sessions:", error);
+    showError("Failed to load sessions");
+  }
 }
 
 function closeManualAttendance() {
@@ -418,91 +467,282 @@ function closeManualAttendance() {
 }
 
 async function loadStudentList() {
-  const sessionSelect = document.getElementById("manual-session-select")
-  const sessionId = sessionSelect.value
+  const sessionSelect = document.getElementById("manual-session-select");
+  const sessionId = sessionSelect.value;
+  const studentList = document.getElementById("student-list");
+  const classInfo = document.getElementById("class-info");
 
   if (!sessionId) {
-    document.getElementById("student-list").innerHTML = ""
-    return
+    studentList.innerHTML = "";
+    if (classInfo) classInfo.innerHTML = "";
+    return;
   }
 
   try {
-    const response = await axios.get(`/api/teacher/session/${sessionId}/students`)
-    const students = response.data.students
+    const response = await axios.get(`/api/teacher/session/${sessionId}/students`);
+    const { students, class_info } = response.data;
 
-    const studentList = document.getElementById("student-list")
+    // Update class information
+    if (classInfo) {
+      classInfo.innerHTML = `
+        <div class="mb-4 p-3 bg-gray-50 rounded-lg">
+          <h4 class="font-medium text-gray-900">${class_info.standard}-${class_info.division}</h4>
+          <p class="text-sm text-gray-600">${class_info.subject || 'No subject'} • ${class_info.total_students} students</p>
+          <p class="text-xs text-gray-500">Academic Year: ${class_info.academic_year}</p>
+        </div>
+      `;
+    }
+
+    // Sort students by roll number
+    students.sort((a, b) => Number(a.roll_no) - Number(b.roll_no));
+
+    // Update class statistics
+    const stats = class_info.stats;
+    const classInfoHtml = `
+      <div class="mb-4 p-4 bg-gray-50 rounded-lg">
+        <div class="flex items-center justify-between mb-2">
+          <h4 class="font-medium text-gray-900">${class_info.standard}-${class_info.division}</h4>
+          <span class="text-sm text-gray-600">${class_info.subject || 'No subject'}</span>
+        </div>
+        <div class="grid grid-cols-4 gap-4 text-center">
+          <div>
+            <div class="text-sm font-medium text-gray-500">Total</div>
+            <div class="text-lg font-semibold text-gray-900">${class_info.total_students}</div>
+          </div>
+          <div>
+            <div class="text-sm font-medium text-green-600">Present</div>
+            <div class="text-lg font-semibold text-green-600">${stats.present}</div>
+          </div>
+          <div>
+            <div class="text-sm font-medium text-yellow-600">Late</div>
+            <div class="text-lg font-semibold text-yellow-600">${stats.late}</div>
+          </div>
+          <div>
+            <div class="text-sm font-medium text-red-600">Absent</div>
+            <div class="text-lg font-semibold text-red-600">${stats.absent}</div>
+          </div>
+        </div>
+        <div class="mt-2 text-xs text-gray-500 text-right">
+          Last updated: ${new Date(class_info.last_updated).toLocaleTimeString()}
+        </div>
+      </div>
+    `;
+    document.getElementById('class-info').innerHTML = classInfoHtml;
+
+    // Generate student list with attendance status
     studentList.innerHTML = students
-      .map(
-        (student) => `
-            <div class="flex items-center justify-between p-3 border border-gray-200 rounded-lg">
-                <div class="flex items-center">
-                    <div class="w-8 h-8 bg-gray-100 rounded-full flex items-center justify-center mr-3">
-                        <i class="fas fa-user text-gray-600 text-sm"></i>
-                    </div>
-                    <div>
-                        <h4 class="font-medium text-gray-900">${student.name}</h4>
-                        <p class="text-sm text-gray-600">Roll: ${student.roll_no}</p>
-                    </div>
+      .map((student) => {
+        const isPresent = student.current_status === 'present';
+        const isLate = student.current_status === 'late';
+        const isAbsent = student.current_status === 'absent';
+        const markedAt = student.marked_at ? new Date(student.marked_at).toLocaleTimeString() : '';
+        const markedBy = student.marked_by ? 
+          `<span class="text-xs text-gray-500">• Marked ${student.marked_by === 'teacher' ? 'manually' : 'by ' + student.marked_by}</span>` : '';
+
+        return `
+          <div class="flex items-center justify-between p-3 border border-gray-200 rounded-lg ${
+            isPresent ? 'bg-green-50' : isLate ? 'bg-yellow-50' : 'bg-white'
+          }">
+            <div class="flex items-center">
+              <div class="w-8 h-8 bg-gray-100 rounded-full flex items-center justify-center mr-3">
+                <i class="fas fa-user text-gray-600 text-sm"></i>
+              </div>
+              <div>
+                <h4 class="font-medium text-gray-900">${student.display_name}</h4>
+                <div class="flex items-center text-xs text-gray-500">
+                  ${student.standard}-${student.division}
+                  ${markedAt ? `<span class="mx-1">•</span> ${markedAt}` : ''}
+                  ${markedBy}
                 </div>
-                <div class="flex space-x-2">
-                    <label class="flex items-center">
-                        <input type="radio" name="attendance_${student.id}" value="present" class="mr-1">
-                        <span class="text-sm text-green-600">Present</span>
-                    </label>
-                    <label class="flex items-center">
-                        <input type="radio" name="attendance_${student.id}" value="late" class="mr-1">
-                        <span class="text-sm text-yellow-600">Late</span>
-                    </label>
-                    <label class="flex items-center">
-                        <input type="radio" name="attendance_${student.id}" value="absent" class="mr-1" checked>
-                        <span class="text-sm text-red-600">Absent</span>
-                    </label>
-                </div>
+              </div>
             </div>
-        `,
-      )
-      .join("")
+            <div class="flex space-x-2">
+              <label class="flex items-center">
+                <input type="radio" name="attendance_${student.id}" value="present" 
+                  ${isPresent ? 'checked' : ''} class="mr-1 cursor-pointer">
+                <span class="text-sm text-green-600 cursor-pointer">Present</span>
+              </label>
+              <label class="flex items-center">
+                <input type="radio" name="attendance_${student.id}" value="late" 
+                  ${isLate ? 'checked' : ''} class="mr-1 cursor-pointer">
+                <span class="text-sm text-yellow-600 cursor-pointer">Late</span>
+              </label>
+              <label class="flex items-center">
+                <input type="radio" name="attendance_${student.id}" value="absent" 
+                  ${isAbsent ? 'checked' : ''} class="mr-1 cursor-pointer">
+                <span class="text-sm text-red-600 cursor-pointer">Absent</span>
+              </label>
+            </div>
+          </div>
+        `;
+      })
+      .join("");
+
+    // Add auto-refresh if the session is active
+    if (sessionSelect.options[sessionSelect.selectedIndex].text.includes('Active')) {
+      startAutoRefresh(sessionId);
+    } else {
+      stopAutoRefresh();
+    }
+
   } catch (error) {
-    console.error("Error loading student list:", error)
-    showError("Failed to load student list")
+    console.error("Error loading student list:", error);
+    showError("Failed to load student list");
   }
 }
 
-async function saveManualAttendance() {
-  const sessionSelect = document.getElementById("manual-session-select")
-  const sessionId = sessionSelect.value
+// Auto-refresh functionality
+let refreshTimer = null;
+
+function startAutoRefresh(sessionId) {
+  if (refreshTimer) clearInterval(refreshTimer);
+  refreshTimer = setInterval(() => loadStudentList(), 30000); // Refresh every 30 seconds
+}
+
+function stopAutoRefresh() {
+  if (refreshTimer) {
+    clearInterval(refreshTimer);
+    refreshTimer = null;
+  }
+}
+
+function switchAttendanceMode(mode) {
+  const individualTab = document.getElementById('individual-tab');
+  const bulkTab = document.getElementById('bulk-tab');
+  const individualSection = document.getElementById('individual-section');
+  const bulkSection = document.getElementById('bulk-section');
+
+  if (mode === 'individual') {
+    individualTab.classList.add('text-indigo-600', 'border-b-2', 'border-indigo-600');
+    individualTab.classList.remove('text-gray-500');
+    bulkTab.classList.remove('text-indigo-600', 'border-b-2', 'border-indigo-600');
+    bulkTab.classList.add('text-gray-500');
+    individualSection.classList.remove('hidden');
+    bulkSection.classList.add('hidden');
+  } else {
+    bulkTab.classList.add('text-indigo-600', 'border-b-2', 'border-indigo-600');
+    bulkTab.classList.remove('text-gray-500');
+    individualTab.classList.remove('text-indigo-600', 'border-b-2', 'border-indigo-600');
+    individualTab.classList.add('text-gray-500');
+    bulkSection.classList.remove('hidden');
+    individualSection.classList.add('hidden');
+  }
+}
+
+function downloadTemplate(fileType = 'xlsx') {
+  const sessionSelect = document.getElementById('manual-session-select');
+  const sessionId = sessionSelect.value;
 
   if (!sessionId) {
-    showError("Please select a session")
-    return
+    showError('Please select a session first');
+    return;
   }
 
-  // Collect attendance data
-  const attendanceData = []
-  const studentInputs = document.querySelectorAll('[name^="attendance_"]')
+  // Use the template endpoint to get the file
+  window.location.href = `/api/teacher/attendance/template?session_id=${sessionId}&type=${fileType}`;
+}
 
-  studentInputs.forEach((input) => {
-    if (input.checked) {
-      const studentId = input.name.split("_")[1]
-      attendanceData.push({
-        student_id: studentId,
-        status: input.value,
-      })
+function downloadCSVTemplate() {
+  downloadTemplate('csv');
+}
+
+function downloadXLSXTemplate() {
+  downloadTemplate('xlsx');
+}
+
+function handleFileSelect(event) {
+  const file = event.target.files[0];
+  if (file) {
+    const fileInfo = document.getElementById('file-info');
+    const fileName = document.getElementById('file-name');
+    fileName.textContent = file.name;
+    fileInfo.classList.remove('hidden');
+  }
+}
+
+function removeSelectedFile() {
+  const fileInput = document.getElementById('csv-upload');
+  const fileInfo = document.getElementById('file-info');
+  fileInput.value = '';
+  fileInfo.classList.add('hidden');
+}
+
+async function saveManualAttendance() {
+  const sessionSelect = document.getElementById("manual-session-select");
+  const sessionId = sessionSelect.value;
+
+  if (!sessionId) {
+    showError("Please select a session");
+    return;
+  }
+
+  // Check which mode is active
+  const isIndividualMode = !document.getElementById('individual-section').classList.contains('hidden');
+
+  if (isIndividualMode) {
+    // Handle individual attendance
+    const attendanceData = [];
+    const studentInputs = document.querySelectorAll('[name^="attendance_"]');
+
+    studentInputs.forEach((input) => {
+      if (input.checked) {
+        const studentId = input.name.split("_")[1];
+        attendanceData.push({
+          student_id: studentId,
+          status: input.value,
+        });
+      }
+    });
+
+    try {
+      await axios.post("/api/teacher/attendance/manual", {
+        session_id: sessionId,
+        attendance: attendanceData,
+      });
+
+      showSuccess("Attendance saved successfully!");
+      closeManualAttendance();
+      refreshAttendance();
+    } catch (error) {
+      console.error("Error saving attendance:", error);
+      showError(error.response?.data?.error || "Failed to save attendance");
     }
-  })
+  } else {
+    // Handle bulk upload
+    const fileInput = document.getElementById('file-upload');
+    const file = fileInput.files[0];
 
-  try {
-    await axios.post("/api/teacher/attendance/manual", {
-      session_id: sessionId,
-      attendance: attendanceData,
-    })
+    if (!file) {
+      showError("Please select a file");
+      return;
+    }
 
-    showSuccess("Attendance saved successfully!")
-    closeManualAttendance()
-    refreshAttendance()
-  } catch (error) {
-    console.error("Error saving attendance:", error)
-    showError(error.response?.data?.error || "Failed to save attendance")
+    const formData = new FormData();
+    formData.append('file', file);
+    formData.append('session_id', sessionId);
+
+    try {
+      const response = await axios.post("/api/teacher/attendance/bulk", formData, {
+        headers: {
+          'Content-Type': 'multipart/form-data'
+        }
+      });
+
+      if (response.data.errors && response.data.errors.length > 0) {
+        // Show errors in a more user-friendly way
+        const errorMessages = response.data.errors.map(err => 
+          `Roll No ${err.roll_no}: ${err.error}`
+        ).join('\n');
+        showError(`Some records had errors:\n${errorMessages}`);
+      } else {
+        showSuccess(response.data.message);
+        closeManualAttendance();
+        refreshAttendance();
+      }
+    } catch (error) {
+      console.error("Error uploading attendance:", error);
+      showError(error.response?.data?.error || "Failed to upload attendance");
+    }
   }
 }
 

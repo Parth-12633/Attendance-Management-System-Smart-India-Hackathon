@@ -7,7 +7,6 @@ import numpy as np
 import os
 from models import db, Student
 from flask import current_app
-import face_recognition
 
 ai_bp = Blueprint('ai', __name__)
 
@@ -113,7 +112,9 @@ def get_student_analysis(student_id):
 
 @ai_bp.route('/register_face', methods=['POST'])
 def register_face():
+    import face_recognition
     import base64, json
+    import uuid
     data = request.get_json()
     student_id = data.get('student_id')
     images = data.get('images', [])  # List of base64 images
@@ -122,12 +123,23 @@ def register_face():
     # Limit to 5 images
     images = images[:5]
     encodings = []
-    for img_b64 in images:
+    image_paths = []
+    # Save images to static/face_images/{student_id}/
+    save_dir = os.path.join(current_app.root_path, 'static', 'face_images', str(student_id))
+    os.makedirs(save_dir, exist_ok=True)
+    for idx, img_b64 in enumerate(images):
         img_bytes = base64.b64decode(img_b64.split(',')[1] if ',' in img_b64 else img_b64)
         import io
         from PIL import Image
         img = Image.open(io.BytesIO(img_bytes))
         img_np = np.array(img)
+        # Save image to disk
+        filename = f"face_{uuid.uuid4().hex[:8]}_{idx+1}.jpg"
+        file_path = os.path.join(save_dir, filename)
+        img.save(file_path, format="JPEG")
+        # Store relative path for DB
+        rel_path = os.path.relpath(file_path, current_app.root_path)
+        image_paths.append(rel_path)
         faces = face_recognition.face_encodings(img_np)
         if faces:
             encodings.append(faces[0])
@@ -138,19 +150,30 @@ def register_face():
     np.save(npy_path, avg_encoding)
     student = Student.query.get(student_id)
     student.face_encoding = npy_path
-    student.face_images = json.dumps(images)
+    student.face_images = json.dumps(image_paths)
     db.session.commit()
-    return jsonify({'success': True})
+    return jsonify({'success': True, 'image_paths': image_paths})
 
 @ai_bp.route('/recognize_face', methods=['POST'])
 def recognize_face():
+    import face_recognition
+    import base64
+    from datetime import datetime
+    import pytz
     data = request.get_json()
     image = data.get('image')  # base64 image or file path
-    session_id = data.get('session_id')
-    if not image or not session_id:
-        return jsonify({'error': 'Missing image or session_id'}), 400
-    img = face_recognition.load_image_file(image)
-    faces = face_recognition.face_encodings(img)
+    if not image:
+        return jsonify({'error': 'Missing image'}), 400
+    # Decode base64 image
+    if image.startswith('data:image'):
+        img_bytes = base64.b64decode(image.split(',')[1])
+        import io
+        from PIL import Image
+        img = Image.open(io.BytesIO(img_bytes))
+        img_np = np.array(img)
+    else:
+        img_np = face_recognition.load_image_file(image)
+    faces = face_recognition.face_encodings(img_np)
     if not faces:
         return jsonify({'error': 'No face found'}), 400
     encoding = faces[0]
@@ -160,15 +183,30 @@ def recognize_face():
         known_encoding = np.load(student.face_encoding)
         match = face_recognition.compare_faces([known_encoding], encoding, tolerance=0.5)[0]
         if match:
-            # Mark attendance for this student and session
-            from models import Attendance, AttendanceSession
-            session = AttendanceSession.query.get(session_id)
-            if not session:
-                return jsonify({'error': 'Session not found'}), 404
-            existing = Attendance.query.filter_by(student_id=student.id, session_id=session.id).first()
+            # Auto-detect current session for this student
+            from models import Attendance, AttendanceSession, Timetable, Class
+            tz = pytz.timezone('Asia/Kolkata')
+            now = datetime.now(tz)
+            today = now.date()
+            # Find all sessions for today for student's class/division
+            sessions = AttendanceSession.query.join(Timetable).join(Class).filter(
+                AttendanceSession.date == today,
+                Class.standard == student.standard,
+                Class.division == student.division,
+                AttendanceSession.is_active == True
+            ).all()
+            # Find session where now is between start and end
+            current_session = None
+            for s in sessions:
+                if s.start_time <= now and (s.end_time is None or now <= s.end_time):
+                    current_session = s
+                    break
+            if not current_session:
+                return jsonify({'match': True, 'student_id': student.id, 'name': student.user.name, 'attendance': 'no_active_session'}), 200
+            existing = Attendance.query.filter_by(student_id=student.id, session_id=current_session.id).first()
             if existing:
                 return jsonify({'match': True, 'student_id': student.id, 'name': student.user.name, 'attendance': 'already_marked'})
-            attendance = Attendance(student_id=student.id, session_id=session.id, status='present', marked_by='face')
+            attendance = Attendance(student_id=student.id, session_id=current_session.id, status='present', marked_by='face')
             db.session.add(attendance)
             db.session.commit()
             return jsonify({'match': True, 'student_id': student.id, 'name': student.user.name, 'attendance': 'marked', 'marked_at': attendance.marked_at.isoformat()})

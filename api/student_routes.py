@@ -4,6 +4,7 @@ from models import Timetable, Class, Subject, User, Teacher
 from auth import token_required, role_required
 from datetime import datetime, date, timedelta
 from sqlalchemy import func
+import pytz
 
 student_bp = Blueprint('student', __name__, url_prefix='/api/student')
 
@@ -12,7 +13,7 @@ student_bp = Blueprint('student', __name__, url_prefix='/api/student')
 @role_required(['student'])
 def get_dashboard_data(current_user):
     student = current_user.student
-    today = date.today()
+    today = datetime.now(pytz.timezone('Asia/Kolkata')).date()
     
     # Get today's attendance sessions
     sessions = db.session.query(AttendanceSession).join(Timetable).join(Class).filter(
@@ -138,12 +139,12 @@ def get_attendance_report(current_user):
     if start_date:
         start_date = datetime.strptime(start_date, '%Y-%m-%d').date()
     else:
-        start_date = date.today() - timedelta(days=30)  # Last 30 days
-    
+        start_date = datetime.now(pytz.timezone('Asia/Kolkata')).date() - timedelta(days=30)  # Last 30 days
+
     if end_date:
         end_date = datetime.strptime(end_date, '%Y-%m-%d').date()
     else:
-        end_date = date.today()
+        end_date = datetime.now(pytz.timezone('Asia/Kolkata')).date()
     
     # Get attendance records
     attendance_query = db.session.query(

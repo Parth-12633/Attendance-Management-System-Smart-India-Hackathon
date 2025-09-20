@@ -49,9 +49,9 @@ function setupCameraAttendance() {
   if (cameraBtn) {
     cameraBtn.addEventListener("click", async () => {
       cameraModal.classList.remove("hidden");
-      // Load today's sessions for dropdown
+      // Load all today's sessions for dropdown (for facial attendance)
       try {
-        const res = await axios.get("/api/attendance/sessions/today");
+        const res = await axios.get("/api/attendance/sessions/today/all");
         const select = document.getElementById("session-select");
         select.innerHTML = "";
         if ((res.data.sessions || []).length === 0) {
@@ -60,14 +60,25 @@ function setupCameraAttendance() {
           option.textContent = "No sessions available";
           select.appendChild(option);
         } else {
+          let now = new Date();
+          let selectedSessionId = null;
           (res.data.sessions || []).forEach(s => {
-            const start = new Date(s.start_time).toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit" });
-            const end = s.end_time ? new Date(s.end_time).toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit" }) : "--:--";
+            const startDate = new Date(s.start_time);
+            const endDate = s.end_time ? new Date(s.end_time) : null;
+            const start = startDate.toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit" });
+            const end = endDate ? endDate.toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit" }) : "--:--";
             const option = document.createElement("option");
             option.value = s.id;
             option.textContent = `${s.subject} (${start} - ${end})`;
+            // Auto-select if now is between start and end
+            if (startDate <= now && (!endDate || now <= endDate)) {
+              selectedSessionId = s.id;
+            }
             select.appendChild(option);
           });
+          if (selectedSessionId) {
+            select.value = selectedSessionId;
+          }
         }
       } catch (err) {
         feedback.textContent = "Could not fetch sessions.";
@@ -147,9 +158,53 @@ function setupCameraAttendance() {
 async function initializeDashboard() {
   const user = auth.user;
   if (user) {
-    document.getElementById("welcome-message").textContent = `Welcome back, ${user.name}!`;
-    document.getElementById("student-info").textContent =
-      `Class ${user.standard}-${user.division} • Roll No: ${user.roll_no}`;
+    // Update welcome message with proper name formatting
+    const welcomeMessage = document.getElementById("welcome-message");
+    welcomeMessage.textContent = `Welcome back, ${user.name || 'Student'}!`;
+
+    // Update student info with complete details
+    const studentInfo = document.getElementById("student-info");
+    let infoText = '';
+    
+    if (user.standard && user.division) {
+      infoText += `Class ${user.standard}-${user.division}`;
+    }
+    
+    if (user.roll_no) {
+      infoText += infoText ? ` • Roll No: ${user.roll_no}` : `Roll No: ${user.roll_no}`;
+    }
+    
+    if (!infoText) {
+      infoText = 'Loading student information...';
+    }
+    
+    studentInfo.textContent = infoText;
+
+    // Try to fetch additional student details if needed
+    try {
+      const response = await axios.get('/api/student/dashboard');
+      if (response.data) {
+        welcomeMessage.textContent = `Welcome back, ${user.name}!`;
+        // Update statistics
+        if (response.data.stats) {
+          const stats = response.data.stats;
+          document.getElementById("present-count").textContent = 
+            `${stats.present_today}/${stats.total_today}`;
+          document.getElementById("week-attendance").textContent = 
+            stats.weekly_total > 0 
+              ? `${Math.round((stats.weekly_present / stats.weekly_total) * 100)}%`
+              : '0%';
+          document.getElementById("pending-tasks").textContent = 
+            stats.pending_tasks || '0';
+          document.getElementById("overall-percentage").textContent = 
+            stats.weekly_total > 0
+              ? `${Math.round((stats.weekly_present / stats.weekly_total) * 100)}%`
+              : '0%';
+        }
+      }
+    } catch (error) {
+      console.error('Error fetching additional student data:', error);
+    }
   }
 }
 
@@ -190,6 +245,13 @@ function displayTodaySchedule(sessions) {
         minute: "2-digit",
       });
 
+      const endTime = session.end_time ? new Date(session.end_time).toLocaleTimeString("en-US", {
+        hour: "2-digit",
+        minute: "2-digit",
+      }) : null;
+
+      const timeDisplay = endTime ? `${startTime} - ${endTime}` : startTime;
+
       const statusClass =
         session.attendance_status === "present"
           ? "bg-green-100 text-green-800"
@@ -204,6 +266,22 @@ function displayTodaySchedule(sessions) {
             ? "fa-clock"
             : "fa-times-circle";
 
+      // Format marked time if available
+      const markedTime = session.marked_at 
+        ? new Date(session.marked_at).toLocaleTimeString("en-US", {
+            hour: "2-digit",
+            minute: "2-digit",
+          })
+        : null;
+
+      // Add additional details about who marked the attendance
+      const markedDetails = markedTime 
+        ? `<div class="text-xs text-gray-500 mt-1">
+             <i class="fas fa-clock mr-1"></i> Marked at ${markedTime}
+             ${session.marked_by ? `<span class="mx-1">•</span> ${session.marked_by === 'face' ? 'Face Recognition' : session.marked_by}` : ''}
+           </div>`
+        : '';
+
       return `
         <div class="flex items-center justify-between p-4 border border-gray-200 rounded-lg hover:bg-gray-50 transition-colors">
           <div class="flex items-center">
@@ -212,7 +290,12 @@ function displayTodaySchedule(sessions) {
             </div>
             <div>
               <h4 class="font-semibold text-gray-900">${session.subject}</h4>
-              <p class="text-sm text-gray-600">${session.teacher} • ${startTime}</p>
+              <p class="text-sm text-gray-600">
+                <i class="fas fa-user-tie mr-1"></i> ${session.teacher}
+              </p>
+              <p class="text-xs text-gray-500">
+                <i class="far fa-clock mr-1"></i> ${timeDisplay}
+              </p>
             </div>
           </div>
           <div class="text-right">
@@ -220,7 +303,7 @@ function displayTodaySchedule(sessions) {
               <i class="fas ${statusIcon} mr-1"></i>
               ${session.attendance_status || "Absent"}
             </span>
-            ${session.marked_at ? `<p class="text-xs text-gray-500 mt-1">Marked at ${new Date(session.marked_at).toLocaleTimeString()}</p>` : ""}
+            ${markedDetails}
           </div>
         </div>
       `;
